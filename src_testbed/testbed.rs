@@ -1,5 +1,8 @@
+#![allow(clippy::bad_bit_mask)] // otherwsie clippy complains because of TestbedStateFlags::NONE which is 0.
+
 use std::env;
 use std::mem;
+use std::num::NonZeroUsize;
 
 use bevy::prelude::*;
 
@@ -100,6 +103,14 @@ bitflags! {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RapierSolverType {
+    SmallStepsPgs,
+    StandardPgs,
+}
+
+pub type SimulationBuilders = Vec<(&'static str, fn(&mut Testbed))>;
+
 #[derive(Resource)]
 pub struct TestbedState {
     pub running: RunMode,
@@ -120,6 +131,7 @@ pub struct TestbedState {
     pub example_names: Vec<&'static str>,
     pub selected_example: usize,
     pub selected_backend: usize,
+    pub solver_type: RapierSolverType,
     pub physx_use_two_friction_directions: bool,
     pub snapshot: Option<PhysicsSnapshot>,
     nsteps: usize,
@@ -127,7 +139,7 @@ pub struct TestbedState {
 }
 
 #[derive(Resource)]
-struct SceneBuilders(Vec<(&'static str, fn(&mut Testbed))>);
+struct SceneBuilders(SimulationBuilders);
 
 #[cfg(feature = "other-backends")]
 struct OtherBackends {
@@ -147,6 +159,7 @@ pub struct TestbedGraphics<'a, 'b, 'c, 'd, 'e, 'f> {
     #[allow(dead_code)] // Dead in 2D but not in 3D.
     camera_transform: GlobalTransform,
     camera: &'a mut OrbitCamera,
+    keys: &'a Input<KeyCode>,
 }
 
 pub struct Testbed<'a, 'b, 'c, 'd, 'e, 'f> {
@@ -202,6 +215,7 @@ impl TestbedApp {
             example_names: Vec::new(),
             selected_example: 0,
             selected_backend: RAPIER_BACKEND,
+            solver_type: RapierSolverType::SmallStepsPgs,
             physx_use_two_friction_directions: true,
             nsteps: 1,
             camera_locked: false,
@@ -227,7 +241,7 @@ impl TestbedApp {
         }
     }
 
-    pub fn from_builders(default: usize, builders: Vec<(&'static str, fn(&mut Testbed))>) -> Self {
+    pub fn from_builders(default: usize, builders: SimulationBuilders) -> Self {
         let mut res = TestbedApp::new_empty();
         res.state
             .action_flags
@@ -237,7 +251,7 @@ impl TestbedApp {
         res
     }
 
-    pub fn set_builders(&mut self, builders: Vec<(&'static str, fn(&mut Testbed))>) {
+    pub fn set_builders(&mut self, builders: SimulationBuilders) {
         self.state.example_names = builders.iter().map(|e| e.0).collect();
         self.builders = SceneBuilders(builders)
     }
@@ -270,7 +284,7 @@ impl TestbedApp {
             use std::io::{BufWriter, Write};
             // Don't enter the main loop. We will just step the simulation here.
             let mut results = Vec::new();
-            let builders = mem::replace(&mut self.builders.0, Vec::new());
+            let builders = mem::take(&mut self.builders.0);
             let backend_names = self.state.backend_names.clone();
 
             for builder in builders {
@@ -284,11 +298,7 @@ impl TestbedApp {
                     self.harness
                         .physics
                         .integration_parameters
-                        .max_velocity_iterations = 4;
-                    self.harness
-                        .physics
-                        .integration_parameters
-                        .max_stabilization_iterations = 1;
+                        .num_solver_iterations = NonZeroUsize::new(4).unwrap();
 
                     // Init world.
                     let mut testbed = Testbed {
@@ -417,8 +427,7 @@ impl TestbedApp {
 
 impl<'a, 'b, 'c, 'd, 'e, 'f> TestbedGraphics<'a, 'b, 'c, 'd, 'e, 'f> {
     pub fn set_body_color(&mut self, body: RigidBodyHandle, color: [f32; 3]) {
-        self.graphics
-            .set_body_color(&mut self.materials, body, color);
+        self.graphics.set_body_color(self.materials, body, color);
     }
 
     pub fn add_body(
@@ -458,6 +467,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f> TestbedGraphics<'a, 'b, 'c, 'd, 'e, 'f> {
             colliders,
         )
     }
+
+    pub fn keys(&self) -> &Input<KeyCode> {
+        self.keys
+    }
 }
 
 impl<'a, 'b, 'c, 'd, 'e, 'f> Testbed<'a, 'b, 'c, 'd, 'e, 'f> {
@@ -487,7 +500,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f> Testbed<'a, 'b, 'c, 'd, 'e, 'f> {
     }
 
     pub fn harness_mut(&mut self) -> &mut Harness {
-        &mut self.harness
+        self.harness
     }
 
     pub fn set_world(
@@ -910,7 +923,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f> Testbed<'a, 'b, 'c, 'd, 'e, 'f> {
                         .multibody_joints
                         .iter()
                         .next()
-                        .map(|a| a.2.rigid_body_handle());
+                        .map(|(_, _, _, link)| link.rigid_body_handle());
                     if let Some(to_delete) = to_delete {
                         self.harness
                             .physics
@@ -1100,29 +1113,30 @@ fn update_testbed(
     // Handle inputs
     {
         let graphics_context = TestbedGraphics {
-            graphics: &mut *graphics,
+            graphics: &mut graphics,
             commands: &mut commands,
             meshes: &mut *meshes,
             materials: &mut *materials,
             components: &mut gfx_components,
             camera_transform: *cameras.single().1,
             camera: &mut cameras.single_mut().2,
+            keys: &keys,
         };
 
         let mut testbed = Testbed {
             graphics: Some(graphics_context),
-            state: &mut *state,
-            harness: &mut *harness,
+            state: &mut state,
+            harness: &mut harness,
             #[cfg(feature = "other-backends")]
-            other_backends: &mut *other_backends,
-            plugins: &mut *plugins,
+            other_backends: &mut other_backends,
+            plugins: &mut plugins,
         };
 
-        testbed.handle_common_events(&*keys);
-        testbed.update_character_controller(&*keys);
+        testbed.handle_common_events(&keys);
+        testbed.update_character_controller(&keys);
         #[cfg(feature = "dim3")]
         {
-            testbed.update_vehicle_controller(&*keys);
+            testbed.update_vehicle_controller(&keys);
         }
     }
 
@@ -1133,7 +1147,7 @@ fn update_testbed(
 
         for plugin in &mut plugins.0 {
             plugin.update_ui(
-                &mut ui_context,
+                &ui_context,
                 harness,
                 &mut graphics,
                 &mut commands,
@@ -1179,13 +1193,21 @@ fn update_testbed(
                 .set(TestbedActionFlags::EXAMPLE_CHANGED, false);
             clear(&mut commands, &mut state, &mut graphics, &mut plugins);
             harness.clear_callbacks();
-            for plugin in (*plugins).0.iter_mut() {
+            for plugin in plugins.0.iter_mut() {
                 plugin.clear_graphics(&mut graphics, &mut commands);
             }
-            (*plugins).0.clear();
+            plugins.0.clear();
 
             if state.selected_example != prev_example {
                 harness.physics.integration_parameters = IntegrationParameters::default();
+
+                match state.solver_type {
+                    RapierSolverType::SmallStepsPgs => {} // It’s already the default.
+                    RapierSolverType::StandardPgs => harness
+                        .physics
+                        .integration_parameters
+                        .switch_to_standard_pgs_solver(),
+                }
             }
 
             let selected_example = state.selected_example;
@@ -1200,15 +1222,16 @@ fn update_testbed(
                 components: &mut gfx_components,
                 camera_transform: *cameras.single().1,
                 camera: &mut cameras.single_mut().2,
+                keys: &keys,
             };
 
             let mut testbed = Testbed {
                 graphics: Some(graphics_context),
-                state: &mut *state,
-                harness: &mut *harness,
+                state: &mut state,
+                harness: &mut harness,
                 #[cfg(feature = "other-backends")]
-                other_backends: &mut *other_backends,
-                plugins: &mut *plugins,
+                other_backends: &mut other_backends,
+                plugins: &mut plugins,
             };
 
             builders.0[selected_example].1(&mut testbed);
@@ -1351,6 +1374,7 @@ fn update_testbed(
                     components: &mut gfx_components,
                     camera_transform: *cameras.single().1,
                     camera: &mut cameras.single_mut().2,
+                    keys: &keys,
                 };
                 harness.step_with_graphics(Some(&mut testbed_graphics));
 
@@ -1404,8 +1428,8 @@ fn update_testbed(
         for (camera, camera_pos, _) in cameras.iter_mut() {
             highlight_hovered_body(
                 &mut *materials,
-                &mut *graphics,
-                &mut *state,
+                &mut graphics,
+                &mut state,
                 &harness.physics,
                 window,
                 camera,
