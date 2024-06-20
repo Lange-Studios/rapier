@@ -811,19 +811,16 @@ impl<'a, 'b, 'c, 'd, 'e, 'f> Testbed<'a, 'b, 'c, 'd, 'e, 'f> {
                 QueryFilter::new().exclude_rigid_body(character_handle),
                 |c| collisions.push(c),
             );
-
-            for collision in &collisions {
-                controller.solve_character_collision_impulses(
-                    phx.integration_parameters.dt,
-                    &mut phx.bodies,
-                    &phx.colliders,
-                    &phx.query_pipeline,
-                    character_collider.shape(),
-                    character_mass,
-                    collision,
-                    QueryFilter::new().exclude_rigid_body(character_handle),
-                )
-            }
+            controller.solve_character_collision_impulses(
+                phx.integration_parameters.dt,
+                &mut phx.bodies,
+                &phx.colliders,
+                &phx.query_pipeline,
+                character_collider.shape(),
+                character_mass,
+                collisions,
+                QueryFilter::new().exclude_rigid_body(character_handle),
+            );
 
             let character_body = &mut phx.bodies[character_handle];
             let pos = character_body.position();
@@ -880,7 +877,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f> Testbed<'a, 'b, 'c, 'd, 'e, 'f> {
                         .physics
                         .bodies
                         .iter()
-                        .filter(|e| !e.1.is_fixed())
+                        .filter(|e| e.1.is_dynamic())
                         .map(|e| e.0)
                         .collect();
                     let num_to_delete = (dynamic_bodies.len() / 10).max(0);

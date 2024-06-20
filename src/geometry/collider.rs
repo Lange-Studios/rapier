@@ -2,7 +2,7 @@ use crate::dynamics::{CoefficientCombineRule, MassProperties, RigidBodyHandle};
 use crate::geometry::{
     ActiveCollisionTypes, BroadPhaseProxyIndex, ColliderBroadPhaseData, ColliderChanges,
     ColliderFlags, ColliderMassProps, ColliderMaterial, ColliderParent, ColliderPosition,
-    ColliderShape, ColliderType, InteractionGroups, SharedShape,
+    ColliderShape, ColliderType, InteractionGroups, MeshConverter, MeshConverterError, SharedShape,
 };
 use crate::math::{AngVector, Isometry, Point, Real, Rotation, Vector, DIM};
 use crate::parry::transformation::vhacd::VHACDParameters;
@@ -16,7 +16,7 @@ use parry::shape::{Shape, TriMeshFlags};
 use crate::geometry::HeightFieldFlags;
 
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// A geometric entity that can be attached to a body so it can be affected by contacts and proximity queries.
 ///
 /// To build a new collider, use the [`ColliderBuilder`] structure.
@@ -527,6 +527,12 @@ pub struct ColliderBuilder {
     pub contact_skin: Real,
 }
 
+impl Default for ColliderBuilder {
+    fn default() -> Self {
+        Self::ball(0.5)
+    }
+}
+
 impl ColliderBuilder {
     /// Initialize a new collider builder with the given shape.
     pub fn new(shape: SharedShape) -> Self {
@@ -690,6 +696,21 @@ impl ColliderBuilder {
         flags: TriMeshFlags,
     ) -> Self {
         Self::new(SharedShape::trimesh_with_flags(vertices, indices, flags))
+    }
+
+    /// Initializes a collider builder with a shape converted from the given triangle mesh index
+    /// and vertex buffer.
+    ///
+    /// All the conversion variants could be achieved with other constructors of [`ColliderBuilder`]
+    /// but having this specified by an enum can occasionally be easier or more flexible (determined
+    /// at runtime).
+    pub fn converted_trimesh(
+        vertices: Vec<Point<Real>>,
+        indices: Vec<[u32; 3]>,
+        converter: MeshConverter,
+    ) -> Result<Self, MeshConverterError> {
+        let (shape, pose) = converter.convert(vertices, indices)?;
+        Ok(Self::new(shape).position(pose))
     }
 
     /// Initializes a collider builder with a compound shape obtained from the decomposition of
