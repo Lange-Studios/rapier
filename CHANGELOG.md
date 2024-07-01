@@ -1,3 +1,21 @@
+## Unreleased
+
+### Added
+- Implement rotation gizmo for Ball 2D shape (as radius line) in Debug renderer if `DebugRenderMode::COLLIDER_SHAPES` enabled
+
+## v0.21.0 (23 June 2024)
+
+### Fix
+
+- Fix `NaN` values appearing in bodies translation and rotation after a simulation step with a delta time equal to
+  0 ([#660](https://github.com/dimforge/rapier/pull/660)).
+- Fix crash in the SAP broad-phase when teleporting an object.
+
+### Modified
+
+- Update to `nalgebra` 0.33 and `parry` 0.16.
+- `solve_character_collision_impulses` collisions parameter is now an iterator over references.
+
 ## v0.20.0 (9 June 2024)
 
 This release introduces two new crates:
