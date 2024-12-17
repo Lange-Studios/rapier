@@ -89,11 +89,15 @@ impl PhysicsPipeline {
         }
     }
 
-    fn detect_collisions<TPhysicsHooks: PhysicsHooks, TEventHandler: EventHandler>(
+    fn detect_collisions<
+        TBroadPhase: BroadPhase,
+        TPhysicsHooks: PhysicsHooks,
+        TEventHandler: EventHandler,
+    >(
         &mut self,
         integration_parameters: &IntegrationParameters,
         islands: &mut IslandManager,
-        broad_phase: &mut dyn BroadPhase,
+        broad_phase: &mut TBroadPhase,
         narrow_phase: &mut NarrowPhase,
         bodies: &mut RigidBodySet,
         colliders: &mut ColliderSet,
@@ -405,12 +409,16 @@ impl PhysicsPipeline {
     }
 
     /// Executes one timestep of the physics simulation.
-    pub fn step<TPhysicsHooks: PhysicsHooks, TEventHandler: EventHandler>(
+    pub fn step<
+        TBroadPhase: BroadPhase,
+        TPhysicsHooks: PhysicsHooks,
+        TEventHandler: EventHandler,
+    >(
         &mut self,
         gravity: &Vector<Real>,
         integration_parameters: &IntegrationParameters,
         islands: &mut IslandManager,
-        broad_phase: &mut dyn BroadPhase,
+        broad_phase: &mut TBroadPhase,
         narrow_phase: &mut NarrowPhase,
         bodies: &mut RigidBodySet,
         colliders: &mut ColliderSet,
