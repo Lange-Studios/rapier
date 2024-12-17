@@ -40,16 +40,20 @@ impl CollisionPipeline {
         }
     }
 
-    fn detect_collisions<TEventHandler: EventHandler>(
+    fn detect_collisions<
+        TBroadPhase: BroadPhase,
+        TPhysicsHooks: PhysicsHooks,
+        TEventHandler: EventHandler,
+    >(
         &mut self,
         prediction_distance: Real,
-        broad_phase: &mut dyn BroadPhase,
+        broad_phase: &mut TBroadPhase,
         narrow_phase: &mut NarrowPhase,
         bodies: &mut RigidBodySet,
         colliders: &mut ColliderSet,
         modified_colliders: &[ColliderHandle],
         removed_colliders: &[ColliderHandle],
-        hooks: &dyn PhysicsHooks,
+        hooks: &TPhysicsHooks,
         events: &mut TEventHandler,
         handle_user_changes: bool,
     ) {
@@ -107,15 +111,19 @@ impl CollisionPipeline {
     }
 
     /// Executes one step of the collision detection.
-    pub fn step<TEventHandler: EventHandler>(
+    pub fn step<
+        TBroadPhase: BroadPhase,
+        TPhysicsHooks: PhysicsHooks,
+        TEventHandler: EventHandler,
+    >(
         &mut self,
         prediction_distance: Real,
-        broad_phase: &mut dyn BroadPhase,
+        broad_phase: &mut TBroadPhase,
         narrow_phase: &mut NarrowPhase,
         bodies: &mut RigidBodySet,
         colliders: &mut ColliderSet,
         query_pipeline: Option<&mut QueryPipeline>,
-        hooks: &dyn PhysicsHooks,
+        hooks: &TPhysicsHooks,
         events: &mut TEventHandler,
     ) {
         let modified_bodies = bodies.take_modified();

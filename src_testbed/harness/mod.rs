@@ -11,7 +11,9 @@ use rapier::dynamics::{
 };
 use rapier::geometry::{ColliderSet, DefaultBroadPhase, NarrowPhase};
 use rapier::math::{Real, Vector};
-use rapier::pipeline::{ChannelEventCollector, PhysicsHooks, PhysicsPipeline, QueryPipeline};
+use rapier::pipeline::{
+    ChannelEventCollector, PhysicsHooks, PhysicsHooksBox, PhysicsPipeline, QueryPipeline,
+};
 
 pub mod plugin;
 
@@ -176,7 +178,7 @@ impl Harness {
         self.physics.colliders = colliders;
         self.physics.impulse_joints = impulse_joints;
         self.physics.multibody_joints = multibody_joints;
-        self.physics.hooks = Box::new(hooks);
+        self.physics.hooks = PhysicsHooksBox::new(hooks);
 
         self.physics.islands = IslandManager::new();
         self.physics.broad_phase = DefaultBroadPhase::new();
@@ -243,7 +245,7 @@ impl Harness {
             &mut self.physics.multibody_joints,
             &mut self.physics.ccd_solver,
             Some(&mut self.physics.query_pipeline),
-            &*self.physics.hooks,
+            &self.physics.hooks,
             &mut self.event_handler,
         );
 

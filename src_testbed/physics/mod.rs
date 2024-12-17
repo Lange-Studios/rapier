@@ -7,7 +7,7 @@ use rapier::geometry::{
     ColliderSet, CollisionEvent, ContactForceEvent, DefaultBroadPhase, NarrowPhase,
 };
 use rapier::math::{Real, Vector};
-use rapier::pipeline::{PhysicsHooks, PhysicsPipeline, QueryPipeline};
+use rapier::pipeline::{PhysicsHooksBox, PhysicsPipeline, QueryPipeline};
 
 pub struct PhysicsSnapshot {
     timestep_id: usize,
@@ -99,7 +99,7 @@ pub struct PhysicsState {
     pub query_pipeline: QueryPipeline,
     pub integration_parameters: IntegrationParameters,
     pub gravity: Vector<Real>,
-    pub hooks: Box<dyn PhysicsHooks>,
+    pub hooks: PhysicsHooksBox,
 }
 
 impl Default for PhysicsState {
@@ -123,7 +123,7 @@ impl PhysicsState {
             query_pipeline: QueryPipeline::new(),
             integration_parameters: IntegrationParameters::default(),
             gravity: Vector::y() * -9.81,
-            hooks: Box::new(()),
+            hooks: PhysicsHooksBox::new(()),
         }
     }
 }

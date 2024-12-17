@@ -250,3 +250,28 @@ impl PhysicsHooks for () {
 
     fn modify_solver_contacts(&self, _: &mut ContactModificationContext) {}
 }
+
+pub struct PhysicsHooksBox(Box<dyn PhysicsHooks>);
+
+impl PhysicsHooks for PhysicsHooksBox {
+    fn filter_contact_pair(
+        &self,
+        context: &PairFilterContext,
+    ) -> Option<crate::prelude::SolverFlags> {
+        self.0.filter_contact_pair(context)
+    }
+
+    fn filter_intersection_pair(&self, context: &PairFilterContext) -> bool {
+        self.0.filter_intersection_pair(context)
+    }
+
+    fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
+        self.0.modify_solver_contacts(context);
+    }
+}
+
+impl PhysicsHooksBox {
+    pub fn new(hooks: impl PhysicsHooks + 'static) -> Self {
+        Self(Box::new(hooks))
+    }
+}

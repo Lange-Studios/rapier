@@ -89,7 +89,7 @@ impl PhysicsPipeline {
         }
     }
 
-    fn detect_collisions<TEventHandler: EventHandler>(
+    fn detect_collisions<TPhysicsHooks: PhysicsHooks, TEventHandler: EventHandler>(
         &mut self,
         integration_parameters: &IntegrationParameters,
         islands: &mut IslandManager,
@@ -101,7 +101,7 @@ impl PhysicsPipeline {
         multibody_joints: &MultibodyJointSet,
         modified_colliders: &[ColliderHandle],
         removed_colliders: &[ColliderHandle],
-        hooks: &dyn PhysicsHooks,
+        hooks: &TPhysicsHooks,
         events: &mut TEventHandler,
         handle_user_changes: bool,
     ) {
@@ -405,7 +405,7 @@ impl PhysicsPipeline {
     }
 
     /// Executes one timestep of the physics simulation.
-    pub fn step<TEventHandler: EventHandler>(
+    pub fn step<TPhysicsHooks: PhysicsHooks, TEventHandler: EventHandler>(
         &mut self,
         gravity: &Vector<Real>,
         integration_parameters: &IntegrationParameters,
@@ -418,7 +418,7 @@ impl PhysicsPipeline {
         multibody_joints: &mut MultibodyJointSet,
         ccd_solver: &mut CCDSolver,
         mut query_pipeline: Option<&mut QueryPipeline>,
-        hooks: &dyn PhysicsHooks,
+        hooks: &TPhysicsHooks,
         events: &mut TEventHandler,
     ) {
         self.counters.reset();

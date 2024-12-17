@@ -687,12 +687,15 @@ impl NarrowPhase {
         }
     }
 
-    pub(crate) fn compute_intersections<TEventHandler: EventHandler>(
+    pub(crate) fn compute_intersections<
+        TPhysicsHooks: PhysicsHooks,
+        TEventHandler: EventHandler,
+    >(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         modified_colliders: &[ColliderHandle],
-        hooks: &dyn PhysicsHooks,
+        hooks: &TPhysicsHooks,
         events: &mut TEventHandler,
     ) {
         if modified_colliders.is_empty() {
@@ -790,7 +793,7 @@ impl NarrowPhase {
         });
     }
 
-    pub(crate) fn compute_contacts<TEventHandler: EventHandler>(
+    pub(crate) fn compute_contacts<TPhysicsHooks: PhysicsHooks, TEventHandler: EventHandler>(
         &mut self,
         prediction_distance: Real,
         dt: Real,
@@ -799,7 +802,7 @@ impl NarrowPhase {
         impulse_joints: &ImpulseJointSet,
         multibody_joints: &MultibodyJointSet,
         modified_colliders: &[ColliderHandle],
-        hooks: &dyn PhysicsHooks,
+        hooks: &TPhysicsHooks,
         events: &mut TEventHandler,
     ) {
         if modified_colliders.is_empty() {
