@@ -70,13 +70,13 @@ impl IntersectionPair {
         }
     }
 
-    pub(crate) fn emit_start_event(
+    pub(crate) fn emit_start_event<TEventHandler: EventHandler>(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         collider1: ColliderHandle,
         collider2: ColliderHandle,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         self.start_event_emitted = true;
         events.handle_collision_event(
@@ -87,13 +87,13 @@ impl IntersectionPair {
         );
     }
 
-    pub(crate) fn emit_stop_event(
+    pub(crate) fn emit_stop_event<TEventHandler: EventHandler>(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         collider1: ColliderHandle,
         collider2: ColliderHandle,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         self.start_event_emitted = false;
         events.handle_collision_event(
@@ -104,13 +104,13 @@ impl IntersectionPair {
         );
     }
 
-    pub(crate) fn emit_active_event(
+    pub(crate) fn emit_active_event<TEventHandler: EventHandler>(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         collider1: ColliderHandle,
         collider2: ColliderHandle,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         events.handle_collision_event(
             bodies,
@@ -221,11 +221,11 @@ impl ContactPair {
         deepest
     }
 
-    pub(crate) fn emit_start_event(
+    pub(crate) fn emit_start_event<TEventHandler: EventHandler>(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         self.start_event_emitted = true;
 
@@ -237,11 +237,11 @@ impl ContactPair {
         );
     }
 
-    pub(crate) fn emit_stop_event(
+    pub(crate) fn emit_stop_event<TEventHandler: EventHandler>(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         self.start_event_emitted = false;
 
@@ -253,11 +253,11 @@ impl ContactPair {
         );
     }
 
-    pub(crate) fn emit_active_event(
+    pub(crate) fn emit_active_event<TEventHandler: EventHandler>(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         events.handle_collision_event(
             bodies,

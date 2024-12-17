@@ -225,14 +225,14 @@ impl CCDSolver {
     }
 
     /// Outputs the set of bodies as well as their first time-of-impact event.
-    pub fn predict_impacts_at_next_positions(
+    pub fn predict_impacts_at_next_positions<TEventHandler: EventHandler>(
         &mut self,
         dt: Real,
         islands: &IslandManager,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         narrow_phase: &NarrowPhase,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) -> PredictedImpacts {
         let mut frozen = HashMap::<_, Real>::default();
         let mut all_toi = BinaryHeap::new();

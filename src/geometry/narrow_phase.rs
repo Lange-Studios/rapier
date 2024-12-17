@@ -268,14 +268,14 @@ impl NarrowPhase {
     // }
 
     /// Maintain the narrow-phase internal state by taking collider removal into account.
-    pub fn handle_user_changes(
+    pub fn handle_user_changes<TEventHandler: EventHandler>(
         &mut self,
         mut islands: Option<&mut IslandManager>,
         modified_colliders: &[ColliderHandle],
         removed_colliders: &[ColliderHandle],
         colliders: &mut ColliderSet,
         bodies: &mut RigidBodySet,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         // TODO: avoid these hash-maps.
         // They are necessary to handle the swap-remove done internally
@@ -321,7 +321,7 @@ impl NarrowPhase {
         );
     }
 
-    pub(crate) fn remove_collider(
+    pub(crate) fn remove_collider<TEventHandler: EventHandler>(
         &mut self,
         intersection_graph_id: ColliderGraphIndex,
         contact_graph_id: ColliderGraphIndex,
@@ -330,7 +330,7 @@ impl NarrowPhase {
         bodies: &mut RigidBodySet,
         prox_id_remap: &mut HashMap<ColliderHandle, ColliderGraphIndex>,
         contact_id_remap: &mut HashMap<ColliderHandle, ColliderGraphIndex>,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         // Wake up every body in contact with the deleted collider and generate Stopped collision events.
         if let Some(islands) = islands {
@@ -412,13 +412,13 @@ impl NarrowPhase {
         }
     }
 
-    pub(crate) fn handle_user_changes_on_colliders(
+    pub(crate) fn handle_user_changes_on_colliders<TEventHandler: EventHandler>(
         &mut self,
         mut islands: Option<&mut IslandManager>,
         modified_colliders: &[ColliderHandle],
         colliders: &ColliderSet,
         bodies: &mut RigidBodySet,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         let mut pairs_to_remove = vec![];
 
@@ -513,13 +513,13 @@ impl NarrowPhase {
         }
     }
 
-    fn remove_pair(
+    fn remove_pair<TEventHandler: EventHandler>(
         &mut self,
         islands: Option<&mut IslandManager>,
         colliders: &ColliderSet,
         bodies: &mut RigidBodySet,
         pair: &ColliderPair,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
         mode: PairRemovalMode,
     ) {
         if let (Some(co1), Some(co2)) =
@@ -660,13 +660,13 @@ impl NarrowPhase {
         }
     }
 
-    pub(crate) fn register_pairs(
+    pub(crate) fn register_pairs<TEventHandler: EventHandler>(
         &mut self,
         mut islands: Option<&mut IslandManager>,
         colliders: &ColliderSet,
         bodies: &mut RigidBodySet,
         broad_phase_events: &[BroadPhasePairEvent],
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         for event in broad_phase_events {
             match event {
@@ -687,13 +687,13 @@ impl NarrowPhase {
         }
     }
 
-    pub(crate) fn compute_intersections(
+    pub(crate) fn compute_intersections<TEventHandler: EventHandler>(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         modified_colliders: &[ColliderHandle],
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         if modified_colliders.is_empty() {
             return;
@@ -790,7 +790,7 @@ impl NarrowPhase {
         });
     }
 
-    pub(crate) fn compute_contacts(
+    pub(crate) fn compute_contacts<TEventHandler: EventHandler>(
         &mut self,
         prediction_distance: Real,
         dt: Real,
@@ -800,7 +800,7 @@ impl NarrowPhase {
         multibody_joints: &MultibodyJointSet,
         modified_colliders: &[ColliderHandle],
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         if modified_colliders.is_empty() {
             return;

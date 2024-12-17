@@ -45,7 +45,7 @@ pub trait EventHandler: Send + Sync {
     ///                    if at least one of the collider is a sensor (in which case no contact information
     ///                    is ever computed).
     fn handle_collision_event(
-        &self,
+        &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         event: CollisionEvent,
@@ -64,7 +64,7 @@ pub trait EventHandler: Send + Sync {
     /// against the `contact_force_event_threshold` is `2.0` even if the sum of these forces is actually the
     /// zero vector.
     fn handle_contact_force_event(
-        &self,
+        &mut self,
         dt: Real,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
@@ -75,7 +75,7 @@ pub trait EventHandler: Send + Sync {
 
 impl EventHandler for () {
     fn handle_collision_event(
-        &self,
+        &mut self,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
         _event: CollisionEvent,
@@ -84,7 +84,7 @@ impl EventHandler for () {
     }
 
     fn handle_contact_force_event(
-        &self,
+        &mut self,
         _dt: Real,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
@@ -115,7 +115,7 @@ impl ChannelEventCollector {
 
 impl EventHandler for ChannelEventCollector {
     fn handle_collision_event(
-        &self,
+        &mut self,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
         event: CollisionEvent,
@@ -125,7 +125,7 @@ impl EventHandler for ChannelEventCollector {
     }
 
     fn handle_contact_force_event(
-        &self,
+        &mut self,
         dt: Real,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,

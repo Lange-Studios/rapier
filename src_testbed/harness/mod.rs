@@ -244,7 +244,7 @@ impl Harness {
             &mut self.physics.ccd_solver,
             Some(&mut self.physics.query_pipeline),
             &*self.physics.hooks,
-            &self.event_handler,
+            &mut self.event_handler,
         );
 
         for plugin in &mut self.plugins {

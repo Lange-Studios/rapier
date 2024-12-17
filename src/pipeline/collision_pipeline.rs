@@ -40,7 +40,7 @@ impl CollisionPipeline {
         }
     }
 
-    fn detect_collisions(
+    fn detect_collisions<TEventHandler: EventHandler>(
         &mut self,
         prediction_distance: Real,
         broad_phase: &mut dyn BroadPhase,
@@ -50,7 +50,7 @@ impl CollisionPipeline {
         modified_colliders: &[ColliderHandle],
         removed_colliders: &[ColliderHandle],
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
         handle_user_changes: bool,
     ) {
         // Update broad-phase.
@@ -107,7 +107,7 @@ impl CollisionPipeline {
     }
 
     /// Executes one step of the collision detection.
-    pub fn step(
+    pub fn step<TEventHandler: EventHandler>(
         &mut self,
         prediction_distance: Real,
         broad_phase: &mut dyn BroadPhase,
@@ -116,7 +116,7 @@ impl CollisionPipeline {
         colliders: &mut ColliderSet,
         query_pipeline: Option<&mut QueryPipeline>,
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         let modified_bodies = bodies.take_modified();
         let mut modified_colliders = colliders.take_modified();
@@ -208,7 +208,7 @@ mod tests {
             &mut collider_set,
             None,
             &physics_hooks,
-            &(),
+            &mut (),
         );
 
         let mut hit = false;
@@ -260,7 +260,7 @@ mod tests {
             &mut collider_set,
             None,
             &physics_hooks,
-            &(),
+            &mut (),
         );
 
         let mut hit = false;

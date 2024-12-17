@@ -89,7 +89,7 @@ impl PhysicsPipeline {
         }
     }
 
-    fn detect_collisions(
+    fn detect_collisions<TEventHandler: EventHandler>(
         &mut self,
         integration_parameters: &IntegrationParameters,
         islands: &mut IslandManager,
@@ -102,7 +102,7 @@ impl PhysicsPipeline {
         modified_colliders: &[ColliderHandle],
         removed_colliders: &[ColliderHandle],
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
         handle_user_changes: bool,
     ) {
         self.counters.stages.collision_detection_time.resume();
@@ -159,7 +159,7 @@ impl PhysicsPipeline {
         self.counters.stages.collision_detection_time.pause();
     }
 
-    fn build_islands_and_solve_velocity_constraints(
+    fn build_islands_and_solve_velocity_constraints<TEventHandler: EventHandler>(
         &mut self,
         gravity: &Vector<Real>,
         integration_parameters: &IntegrationParameters,
@@ -169,7 +169,7 @@ impl PhysicsPipeline {
         colliders: &mut ColliderSet,
         impulse_joints: &mut ImpulseJointSet,
         multibody_joints: &mut MultibodyJointSet,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         self.counters.stages.island_construction_time.resume();
         islands.update_active_set_with_contacts(
@@ -330,7 +330,7 @@ impl PhysicsPipeline {
         self.counters.stages.solver_time.pause();
     }
 
-    fn run_ccd_motion_clamping(
+    fn run_ccd_motion_clamping<TEventHandler: EventHandler>(
         &mut self,
         integration_parameters: &IntegrationParameters,
         islands: &IslandManager,
@@ -338,7 +338,7 @@ impl PhysicsPipeline {
         colliders: &mut ColliderSet,
         narrow_phase: &NarrowPhase,
         ccd_solver: &mut CCDSolver,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         self.counters.ccd.toi_computation_time.start();
         // Handle CCD
@@ -405,7 +405,7 @@ impl PhysicsPipeline {
     }
 
     /// Executes one timestep of the physics simulation.
-    pub fn step(
+    pub fn step<TEventHandler: EventHandler>(
         &mut self,
         gravity: &Vector<Real>,
         integration_parameters: &IntegrationParameters,
@@ -419,7 +419,7 @@ impl PhysicsPipeline {
         ccd_solver: &mut CCDSolver,
         mut query_pipeline: Option<&mut QueryPipeline>,
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut TEventHandler,
     ) {
         self.counters.reset();
         self.counters.step_started();
@@ -707,7 +707,7 @@ mod test {
             &mut CCDSolver::new(),
             None,
             &(),
-            &(),
+            &mut (),
         );
     }
 
@@ -763,7 +763,7 @@ mod test {
             &mut CCDSolver::new(),
             None,
             &(),
-            &(),
+            &mut (),
         );
     }
 
@@ -836,7 +836,7 @@ mod test {
         let mut multibody_joints = MultibodyJointSet::new();
         let mut islands = IslandManager::new();
         let physics_hooks = ();
-        let event_handler = ();
+        let mut event_handler = ();
 
         let body = RigidBodyBuilder::dynamic().build();
         let b_handle = bodies.insert(body);
@@ -866,7 +866,7 @@ mod test {
                 &mut ccd,
                 None,
                 &physics_hooks,
-                &event_handler,
+                &mut event_handler,
             );
         }
     }
@@ -904,7 +904,7 @@ mod test {
             &mut CCDSolver::new(),
             None,
             &(),
-            &(),
+            &mut (),
         );
 
         // Switch body type to Dynamic
@@ -927,7 +927,7 @@ mod test {
             &mut CCDSolver::new(),
             None,
             &(),
-            &(),
+            &mut (),
         );
 
         let body = bodies.get(h).unwrap();
@@ -986,7 +986,7 @@ mod test {
             &mut CCDSolver::new(),
             None,
             &(),
-            &(),
+            &mut (),
         );
         let translation = bodies[h_dynamic].translation();
         let rotation = bodies[h_dynamic].rotation();
