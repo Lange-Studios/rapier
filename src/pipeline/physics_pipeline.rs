@@ -127,7 +127,7 @@ impl PhysicsPipeline {
         modified_colliders: &[ColliderHandle],
         removed_colliders: &[ColliderHandle],
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
         handle_user_changes: bool,
     ) {
         self.counters.stages.collision_detection_time.resume();
@@ -193,7 +193,7 @@ impl PhysicsPipeline {
         colliders: &mut ColliderSet,
         impulse_joints: &mut ImpulseJointSet,
         multibody_joints: &mut MultibodyJointSet,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         self.counters.stages.island_construction_time.resume();
         // NOTE: islands update must be done after the narrow-phase.
@@ -372,7 +372,7 @@ impl PhysicsPipeline {
         broad_phase: &mut BroadPhaseBvh,
         narrow_phase: &NarrowPhase,
         ccd_solver: &mut CCDSolver,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         self.counters.ccd.toi_computation_time.start();
         // Handle CCD
@@ -496,7 +496,7 @@ impl PhysicsPipeline {
         multibody_joints: &mut MultibodyJointSet,
         ccd_solver: &mut CCDSolver,
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         self.counters.reset();
         self.counters.step_started();

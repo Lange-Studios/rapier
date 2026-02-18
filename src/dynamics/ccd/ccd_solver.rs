@@ -241,7 +241,7 @@ impl CCDSolver {
         colliders: &ColliderSet,
         broad_phase: &mut BroadPhaseBvh,
         narrow_phase: &NarrowPhase,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) -> PredictedImpacts {
         let dt = params.dt;
         let mut frozen = HashMap::<_, Real>::default();

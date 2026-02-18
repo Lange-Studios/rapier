@@ -61,7 +61,7 @@ impl CollisionPipeline {
         modified_colliders: &[ColliderHandle],
         removed_colliders: &[ColliderHandle],
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
         handle_user_changes: bool,
     ) {
         // Update broad-phase.
@@ -134,7 +134,7 @@ impl CollisionPipeline {
         bodies: &mut RigidBodySet,
         colliders: &mut ColliderSet,
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         let modified_bodies = bodies.take_modified();
         let mut modified_colliders = colliders.take_modified();

@@ -108,7 +108,7 @@ pub trait EventHandler: Send + Sync {
     /// - Trigger game events (entering zones, picking up items)
     /// - Track what's touching what
     fn handle_collision_event(
-        &self,
+        &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         event: CollisionEvent,
@@ -130,7 +130,7 @@ pub trait EventHandler: Send + Sync {
     /// * `total_force_magnitude` - Sum of magnitudes of all contact forces (not vector sum!)
     ///   Example: Two forces `[0, 100, 0]` and `[0, -100, 0]` → magnitude = 200 (not 0)
     fn handle_contact_force_event(
-        &self,
+        &mut self,
         dt: Real,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
@@ -141,7 +141,7 @@ pub trait EventHandler: Send + Sync {
 
 impl EventHandler for () {
     fn handle_collision_event(
-        &self,
+        &mut self,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
         _event: CollisionEvent,
@@ -150,7 +150,7 @@ impl EventHandler for () {
     }
 
     fn handle_contact_force_event(
-        &self,
+        &mut self,
         _dt: Real,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
@@ -202,7 +202,7 @@ impl ChannelEventCollector {
 
 impl EventHandler for ChannelEventCollector {
     fn handle_collision_event(
-        &self,
+        &mut self,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
         event: CollisionEvent,
@@ -212,7 +212,7 @@ impl EventHandler for ChannelEventCollector {
     }
 
     fn handle_contact_force_event(
-        &self,
+        &mut self,
         dt: Real,
         _bodies: &RigidBodySet,
         _colliders: &ColliderSet,
