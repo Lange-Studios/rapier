@@ -1,8 +1,8 @@
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-use crate::data::graph::EdgeIndex;
 use crate::data::Coarena;
+use crate::data::graph::EdgeIndex;
 use crate::dynamics::{
     CoefficientCombineRule, ImpulseJointSet, IslandManager, RigidBodyDominance, RigidBodySet,
     RigidBodyType,
@@ -13,15 +13,15 @@ use crate::geometry::{
     ContactPair, InteractionGraph, IntersectionPair, SolverContact, SolverFlags,
     TemporaryInteractionIndex,
 };
-use crate::math::{Real, Vector};
+use crate::math::{MAX_MANIFOLD_POINTS, Real};
 use crate::pipeline::{
     ActiveEvents, ActiveHooks, ContactModificationContext, EventHandler, PairFilterContext,
     PhysicsHooks,
 };
 use crate::prelude::{CollisionEventFlags, MultibodyJointSet};
 use parry::query::{DefaultQueryDispatcher, PersistentQueryDispatcher};
-use parry::utils::IsometryOpt;
-use std::collections::HashMap;
+use parry::utils::PoseOpt;
+use parry::utils::hashmap::HashMap;
 use std::sync::Arc;
 
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
@@ -47,7 +47,18 @@ enum PairRemovalMode {
     Auto,
 }
 
-/// The narrow-phase responsible for computing precise contact information between colliders.
+/// The narrow-phase collision detector that computes precise contact points between colliders.
+///
+/// After the broad-phase quickly filters out distant object pairs, the narrow-phase performs
+/// detailed geometric computations to find exact:
+/// - Contact points (where surfaces touch)
+/// - Contact normals (which direction surfaces face)
+/// - Penetration depths (how much objects overlap)
+///
+/// You typically don't interact with this directly - it's managed by [`PhysicsPipeline::step`](crate::pipeline::PhysicsPipeline::step).
+/// However, you can access it to query contact information or intersection state between specific colliders.
+///
+/// **For spatial queries** (raycasts, shape casts), use [`QueryPipeline`](crate::pipeline::QueryPipeline) instead.
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct NarrowPhase {
@@ -89,7 +100,7 @@ impl NarrowPhase {
     }
 
     /// The query dispatcher used by this narrow-phase to select the right collision-detection
-    /// algorithms depending of the shape types.
+    /// algorithms depending on the shape types.
     pub fn query_dispatcher(
         &self,
     ) -> &dyn PersistentQueryDispatcher<ContactManifoldData, ContactData> {
@@ -108,7 +119,7 @@ impl NarrowPhase {
 
     /// All the contacts involving the given collider.
     ///
-    /// It is strongly recommended to use the [`NarrowPhase::contacts_with`] method instead. This
+    /// It is strongly recommended to use the [`NarrowPhase::contact_pairs_with`] method instead. This
     /// method can be used if the generation number of the collider handle isn't known.
     pub fn contact_pairs_with_unknown_gen(
         &self,
@@ -141,7 +152,7 @@ impl NarrowPhase {
 
     /// All the intersection pairs involving the given collider.
     ///
-    /// It is strongly recommended to use the [`NarrowPhase::intersections_with`]  method instead.
+    /// It is strongly recommended to use the [`NarrowPhase::intersection_pairs_with`]  method instead.
     /// This method can be used if the generation number of the collider handle isn't known.
     pub fn intersection_pairs_with_unknown_gen(
         &self,
@@ -268,6 +279,7 @@ impl NarrowPhase {
     // }
 
     /// Maintain the narrow-phase internal state by taking collider removal into account.
+    #[profiling::function]
     pub fn handle_user_changes(
         &mut self,
         mut islands: Option<&mut IslandManager>,
@@ -280,8 +292,8 @@ impl NarrowPhase {
         // TODO: avoid these hash-maps.
         // They are necessary to handle the swap-remove done internally
         // by the contact/intersection graphs when a node is removed.
-        let mut prox_id_remap = HashMap::new();
-        let mut contact_id_remap = HashMap::new();
+        let mut prox_id_remap = HashMap::default();
+        let mut contact_id_remap = HashMap::default();
 
         for collider in removed_colliders {
             // NOTE: if the collider does not have any graph indices currently, there is nothing
@@ -321,6 +333,7 @@ impl NarrowPhase {
         );
     }
 
+    #[profiling::function]
     pub(crate) fn remove_collider(
         &mut self,
         intersection_graph_id: ColliderGraphIndex,
@@ -412,6 +425,7 @@ impl NarrowPhase {
         }
     }
 
+    #[profiling::function]
     pub(crate) fn handle_user_changes_on_colliders(
         &mut self,
         mut islands: Option<&mut IslandManager>,
@@ -460,7 +474,7 @@ impl NarrowPhase {
                     // to transfer their contact/intersection graph edges to the intersection/contact graph.
                     // To achieve this we will remove the relevant contact/intersection pairs form the
                     // contact/intersection graphs, and then add them into the other graph.
-                    if co.changes.contains(ColliderChanges::TYPE) {
+                    if co.changes.intersects(ColliderChanges::TYPE) {
                         if co.is_sensor() {
                             // Find the contact pairs for this collider and
                             // push them to `pairs_to_remove`.
@@ -491,6 +505,12 @@ impl NarrowPhase {
                             }
                         }
                     }
+
+                    // NOTE: if a collider only changed parent, we don’t need to remove it from any
+                    //       of the graphs as re-parenting doesn’t change the sensor status of a
+                    //       collider. If needed, their collision/intersection data will be
+                    //       updated/removed automatically in the contact or intersection update
+                    //       functions.
                 }
             }
         }
@@ -507,12 +527,13 @@ impl NarrowPhase {
             );
         }
 
-        // Add the paid removed pair to the relevant graph.
+        // Add the removed pair to the relevant graph.
         for pair in pairs_to_remove {
             self.add_pair(colliders, &pair.0);
         }
     }
 
+    #[profiling::function]
     fn remove_pair(
         &mut self,
         islands: Option<&mut IslandManager>,
@@ -561,7 +582,7 @@ impl NarrowPhase {
                     // Emit a contact stopped event if we had a contact before removing the edge.
                     // Also wake up the dynamic bodies that were in contact.
                     if let Some(mut ctct) = contact_pair {
-                        if ctct.has_any_active_contact {
+                        if ctct.has_any_active_contact() {
                             if let Some(islands) = islands {
                                 if let Some(co_parent1) = &co1.parent {
                                     islands.wake_up(bodies, co_parent1.handle, true);
@@ -584,16 +605,11 @@ impl NarrowPhase {
         }
     }
 
+    #[profiling::function]
     fn add_pair(&mut self, colliders: &ColliderSet, pair: &ColliderPair) {
         if let (Some(co1), Some(co2)) =
             (colliders.get(pair.collider1), colliders.get(pair.collider2))
         {
-            if co1.parent.map(|p| p.handle) == co2.parent.map(|p| p.handle) && co1.parent.is_some()
-            {
-                // Same parents. Ignore collisions.
-                return;
-            }
-
             // These colliders have no parents - continue.
 
             let (gid1, gid2) = self.graph_indices.ensure_pair_exists(
@@ -687,18 +703,14 @@ impl NarrowPhase {
         }
     }
 
+    #[profiling::function]
     pub(crate) fn compute_intersections(
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
-        modified_colliders: &[ColliderHandle],
         hooks: &dyn PhysicsHooks,
         events: &dyn EventHandler,
     ) {
-        if modified_colliders.is_empty() {
-            return;
-        }
-
         let nodes = &self.intersection_graph.graph.nodes;
         let query_dispatcher = &*self.query_dispatcher;
 
@@ -709,6 +721,8 @@ impl NarrowPhase {
             let had_intersection = edge.weight.intersecting;
             let co1 = &colliders[handle1];
             let co2 = &colliders[handle2];
+            let rb_handle1 = co1.parent.map(|p| p.handle);
+            let rb_handle2 = co2.parent.map(|p| p.handle);
 
             'emit_events: {
                 if !co1.changes.needs_narrow_phase_update()
@@ -718,6 +732,11 @@ impl NarrowPhase {
                     return;
                 }
 
+                if rb_handle1 == rb_handle2 && co1.parent.is_some() {
+                    // Same parents. Ignore collisions.
+                    edge.weight.intersecting = false;
+                    break 'emit_events;
+                }
                 // TODO: avoid lookup into bodies.
                 let mut rb_type1 = RigidBodyType::Fixed;
                 let mut rb_type2 = RigidBodyType::Fixed;
@@ -750,8 +769,8 @@ impl NarrowPhase {
                     let context = PairFilterContext {
                         bodies,
                         colliders,
-                        rigid_body1: co1.parent.map(|p| p.handle),
-                        rigid_body2: co2.parent.map(|p| p.handle),
+                        rigid_body1: rb_handle1,
+                        rigid_body2: rb_handle2,
                         collider1: handle1,
                         collider2: handle2,
                     };
@@ -790,30 +809,31 @@ impl NarrowPhase {
         });
     }
 
+    #[profiling::function]
     pub(crate) fn compute_contacts(
         &mut self,
         prediction_distance: Real,
         dt: Real,
-        bodies: &RigidBodySet,
+        islands: &mut IslandManager,
+        bodies: &mut RigidBodySet,
         colliders: &ColliderSet,
         impulse_joints: &ImpulseJointSet,
         multibody_joints: &MultibodyJointSet,
-        modified_colliders: &[ColliderHandle],
         hooks: &dyn PhysicsHooks,
         events: &dyn EventHandler,
     ) {
-        if modified_colliders.is_empty() {
-            return;
-        }
-
         let query_dispatcher = &*self.query_dispatcher;
+        #[cfg(feature = "parallel")]
+        let (snd, rcv) = std::sync::mpsc::channel();
 
-        // TODO: don't iterate on all the edges.
+        // TODO PERF: don't iterate on all the edges.
         par_iter_mut!(&mut self.contact_graph.graph.edges).for_each(|edge| {
             let pair = &mut edge.weight;
-            let had_any_active_contact = pair.has_any_active_contact;
+            let had_any_active_contact = pair.has_any_active_contact();
             let co1 = &colliders[pair.collider1];
             let co2 = &colliders[pair.collider2];
+            let rb_handle1 = co1.parent.map(|p| p.handle);
+            let rb_handle2 = co2.parent.map(|p| p.handle);
 
             'emit_events: {
                 if !co1.changes.needs_narrow_phase_update()
@@ -821,6 +841,12 @@ impl NarrowPhase {
                 {
                     // No update needed for these colliders.
                     return;
+                }
+
+                if rb_handle1 == rb_handle2 && co1.parent.is_some() {
+                    // Same parents. Ignore collisions.
+                    pair.clear();
+                    break 'emit_events;
                 }
 
                 let rb1 = co1.parent.map(|co_parent1| &bodies[co_parent1.handle]);
@@ -843,7 +869,7 @@ impl NarrowPhase {
                     let link1 = multibody_joints.rigid_body_link(co_parent1.handle);
                     let link2 = multibody_joints.rigid_body_link(co_parent2.handle);
 
-                    if let (Some(link1),Some(link2)) = (link1, link2) {
+                    if let (Some(link1), Some(link2)) = (link1, link2) {
                         // If both bodies belong to the same multibody, apply some additional built-in
                         // contact filtering rules.
                         if link1.multibody == link2.multibody {
@@ -888,8 +914,8 @@ impl NarrowPhase {
                     let context = PairFilterContext {
                         bodies,
                         colliders,
-                        rigid_body1: co1.parent.map(|p| p.handle),
-                        rigid_body2: co2.parent.map(|p| p.handle),
+                        rigid_body1: rb_handle1,
+                        rigid_body2: rb_handle2,
                         collider1: pair.collider1,
                         collider2: pair.collider2,
                     };
@@ -921,24 +947,28 @@ impl NarrowPhase {
                 let contact_skin_sum = co1.contact_skin() + co2.contact_skin();
                 let soft_ccd_prediction1 = rb1.map(|rb| rb.soft_ccd_prediction()).unwrap_or(0.0);
                 let soft_ccd_prediction2 = rb2.map(|rb| rb.soft_ccd_prediction()).unwrap_or(0.0);
-                let effective_prediction_distance = if soft_ccd_prediction1 > 0.0 || soft_ccd_prediction2 > 0.0 {
-                        let aabb1 = co1.compute_collision_aabb(0.0);
-                        let aabb2 = co2.compute_collision_aabb(0.0);
-                        let inv_dt = crate::utils::inv(dt);
+                let effective_prediction_distance = if soft_ccd_prediction1 > 0.0
+                    || soft_ccd_prediction2 > 0.0
+                {
+                    let aabb1 = co1.compute_collision_aabb(0.0);
+                    let aabb2 = co2.compute_collision_aabb(0.0);
+                    let inv_dt = crate::utils::inv(dt);
 
-                        let linvel1 = rb1.map(|rb| rb.linvel()
-                            .cap_magnitude(soft_ccd_prediction1 * inv_dt)).unwrap_or_default();
-                        let linvel2 = rb2.map(|rb| rb.linvel()
-                            .cap_magnitude(soft_ccd_prediction2 * inv_dt)).unwrap_or_default();
+                    let linvel1 = rb1
+                        .map(|rb| rb.linvel().clamp_length_max(soft_ccd_prediction1 * inv_dt))
+                        .unwrap_or_default();
+                    let linvel2 = rb2
+                        .map(|rb| rb.linvel().clamp_length_max(soft_ccd_prediction2 * inv_dt))
+                        .unwrap_or_default();
 
-                        if !aabb1.intersects(&aabb2) && !aabb1.intersects_moving_aabb(&aabb2, linvel2 - linvel1) {
-                            pair.clear();
-                            break 'emit_events;
-                        }
+                    if !aabb1.intersects(&aabb2)
+                        && !aabb1.intersects_moving_aabb(&aabb2, linvel2 - linvel1)
+                    {
+                        pair.clear();
+                        break 'emit_events;
+                    }
 
-
-                    prediction_distance.max(
-                        dt * (linvel1 - linvel2).norm()) + contact_skin_sum
+                    prediction_distance.max(dt * (linvel1 - linvel2).length()) + contact_skin_sum
                 } else {
                     prediction_distance + contact_skin_sum
                 };
@@ -955,70 +985,96 @@ impl NarrowPhase {
                 let friction = CoefficientCombineRule::combine(
                     co1.material.friction,
                     co2.material.friction,
-                    co1.material.friction_combine_rule as u8,
-                    co2.material.friction_combine_rule as u8,
+                    co1.material.friction_combine_rule,
+                    co2.material.friction_combine_rule,
                 );
                 let restitution = CoefficientCombineRule::combine(
                     co1.material.restitution,
                     co2.material.restitution,
-                    co1.material.restitution_combine_rule as u8,
-                    co2.material.restitution_combine_rule as u8,
+                    co1.material.restitution_combine_rule,
+                    co2.material.restitution_combine_rule,
                 );
 
                 let zero = RigidBodyDominance(0); // The value doesn't matter, it will be MAX because of the effective groups.
                 let dominance1 = rb1.map(|rb| rb.dominance).unwrap_or(zero);
                 let dominance2 = rb2.map(|rb| rb.dominance).unwrap_or(zero);
 
-                pair.has_any_active_contact = false;
-
                 for manifold in &mut pair.manifolds {
                     let world_pos1 = manifold.subshape_pos1.prepend_to(&co1.pos);
                     let world_pos2 = manifold.subshape_pos2.prepend_to(&co2.pos);
                     manifold.data.solver_contacts.clear();
-                    manifold.data.rigid_body1 = co1.parent.map(|p| p.handle);
-                    manifold.data.rigid_body2 = co2.parent.map(|p| p.handle);
+                    manifold.data.rigid_body1 = rb_handle1;
+                    manifold.data.rigid_body2 = rb_handle2;
                     manifold.data.solver_flags = solver_flags;
                     manifold.data.relative_dominance = dominance1.effective_group(&rb_type1)
                         - dominance2.effective_group(&rb_type2);
-                    manifold.data.normal = world_pos1 * manifold.local_n1;
+                    manifold.data.normal = world_pos1.rotation * manifold.local_n1;
 
                     // Generate solver contacts.
-                    for (contact_id, contact) in manifold.points.iter().enumerate() {
-                        if contact_id > u8::MAX as usize {
-                            log::warn!("A contact manifold cannot contain more than 255 contacts currently, dropping contact in excess.");
-                            break;
-                        }
+                    #[allow(unused_mut)] // Mut not needed in 2D.
+                    let mut selected = [0, 1, 2, 3];
+                    #[allow(unused_mut)] // Mut not needed in 2D.
+                    let mut num_selected = MAX_MANIFOLD_POINTS.min(manifold.points.len());
 
-                        let effective_contact_dist = contact.dist - co1.contact_skin() - co2.contact_skin();
+                    #[cfg(feature = "dim3")]
+                    // super::manifold_reduction::reduce_manifold_bepu_like(
+                    //     manifold,
+                    //     &mut selected,
+                    //     &mut num_selected,
+                    // );
+                    #[cfg(feature = "dim3")]
+                    super::manifold_reduction::reduce_manifold_naive(
+                        manifold,
+                        &mut selected,
+                        &mut num_selected,
+                        prediction_distance,
+                    );
+
+                    for contact_id in &selected[..num_selected] {
+                        //     // manifold.points.iter().enumerate() {
+                        let contact = &manifold.points[*contact_id];
+                        let effective_contact_dist =
+                            contact.dist - co1.contact_skin() - co2.contact_skin();
 
                         let keep_solver_contact = effective_contact_dist < prediction_distance || {
                             let world_pt1 = world_pos1 * contact.local_p1;
                             let world_pt2 = world_pos2 * contact.local_p2;
-                            let vel1 = rb1.map(|rb| rb.velocity_at_point(&world_pt1)).unwrap_or_default();
-                            let vel2 = rb2.map(|rb| rb.velocity_at_point(&world_pt2)).unwrap_or_default();
-                            effective_contact_dist + (vel2 - vel1).dot(&manifold.data.normal) * dt < prediction_distance
+                            let vel1 = rb1
+                                .map(|rb| rb.velocity_at_point(world_pt1))
+                                .unwrap_or_default();
+                            let vel2 = rb2
+                                .map(|rb| rb.velocity_at_point(world_pt2))
+                                .unwrap_or_default();
+                            effective_contact_dist + (vel2 - vel1).dot(manifold.data.normal) * dt
+                                < prediction_distance
                         };
 
                         if keep_solver_contact {
                             // Generate the solver contact.
                             let world_pt1 = world_pos1 * contact.local_p1;
                             let world_pt2 = world_pos2 * contact.local_p2;
-                            let effective_point = na::center(&world_pt1, &world_pt2);
+
+                            let effective_point = world_pt1.midpoint(world_pt2);
 
                             let solver_contact = SolverContact {
-                                contact_id: contact_id as u8,
+                                contact_id: [*contact_id as u32],
                                 point: effective_point,
                                 dist: effective_contact_dist,
                                 friction,
                                 restitution,
-                                tangent_velocity: Vector::zeros(),
-                                is_new: contact.data.impulse == 0.0,
+                                tangent_velocity: Default::default(),
+                                is_new: (contact.data.impulse == 0.0) as u32 as Real,
                                 warmstart_impulse: contact.data.warmstart_impulse,
                                 warmstart_tangent_impulse: contact.data.warmstart_tangent_impulse,
+                                #[cfg(feature = "dim2")]
+                                warmstart_twist_impulse: na::zero(),
+                                #[cfg(feature = "dim3")]
+                                warmstart_twist_impulse: contact.data.warmstart_twist_impulse,
+                                #[cfg(feature = "dim3")]
+                                padding: Default::default(),
                             };
 
                             manifold.data.solver_contacts.push(solver_contact);
-                            pair.has_any_active_contact = true;
                         }
                     }
 
@@ -1032,8 +1088,8 @@ impl NarrowPhase {
                         let mut context = ContactModificationContext {
                             bodies,
                             colliders,
-                            rigid_body1: co1.parent.map(|p| p.handle),
-                            rigid_body2: co2.parent.map(|p| p.handle),
+                            rigid_body1: rb_handle1,
+                            rigid_body2: rb_handle2,
                             collider1: pair.collider1,
                             collider2: pair.collider2,
                             manifold,
@@ -1048,56 +1104,61 @@ impl NarrowPhase {
                         manifold.data.normal = modifiable_normal;
                         manifold.data.user_data = modifiable_user_data;
                     }
-
-                    /*
-                     * TODO: When using the block solver in 3D, I’d expect this sort to help, but
-                     *       it makes the domino demo worse. Needs more investigation.
-                    fn sort_solver_contacts(mut contacts: &mut [SolverContact]) {
-                        while contacts.len() > 2 {
-                            let first = contacts[0];
-                            let mut furthest_id = 1;
-                            let mut furthest_dist = na::distance(&first.point, &contacts[1].point);
-
-                            for (candidate_id, candidate) in contacts.iter().enumerate().skip(2) {
-                                let candidate_dist = na::distance(&first.point, &candidate.point);
-
-                                if candidate_dist > furthest_dist {
-                                    furthest_dist = candidate_dist;
-                                    furthest_id = candidate_id;
-                                }
-                            }
-
-                            if furthest_id > 1 {
-                                contacts.swap(1, furthest_id);
-                            }
-
-                            contacts = &mut contacts[2..];
-                        }
-                    }
-
-                    sort_solver_contacts(&mut manifold.data.solver_contacts);
-                    */
                 }
             }
 
             let active_events = co1.flags.active_events | co2.flags.active_events;
 
-            if pair.has_any_active_contact
+            if pair.has_any_active_contact()
                 && active_events.contains(ActiveEvents::ACTIVE_COLLISION_EVENTS)
             {
                 pair.emit_active_event(bodies, colliders, events);
             }
 
-            if pair.has_any_active_contact != had_any_active_contact
-                && active_events.contains(ActiveEvents::COLLISION_EVENTS)
-            {
-                if pair.has_any_active_contact {
-                    pair.emit_start_event(bodies, colliders, events);
-                } else {
-                    pair.emit_stop_event(bodies, colliders, events);
+            /*
+             * Handle actions on contact start/stop:
+             *  - Emit event (if applicable).
+             *  - Notify the island manager to potentially wake up the bodies.
+             */
+            let has_any_active_contact = pair.has_any_active_contact();
+            if has_any_active_contact != had_any_active_contact {
+                if active_events.contains(ActiveEvents::COLLISION_EVENTS) {
+                    if has_any_active_contact {
+                        pair.emit_start_event(bodies, colliders, events);
+                    } else {
+                        pair.emit_stop_event(bodies, colliders, events);
+                    }
+                }
+
+                #[cfg(not(feature = "parallel"))]
+                islands.interaction_started_or_stopped(
+                    bodies,
+                    rb_handle1,
+                    rb_handle2,
+                    has_any_active_contact,
+                    true,
+                );
+                #[cfg(feature = "parallel")]
+                {
+                    // When running in parallel mode, defer the islands call after the loop.
+                    let _ = snd.send((rb_handle1, rb_handle2, has_any_active_contact));
                 }
             }
         });
+
+        #[cfg(feature = "parallel")]
+        {
+            drop(snd);
+            for (parent1, parent2, any_active_contact) in rcv.iter() {
+                islands.interaction_started_or_stopped(
+                    bodies,
+                    parent1,
+                    parent2,
+                    any_active_contact,
+                    true,
+                );
+            }
+        }
     }
 
     /// Retrieve all the interactions with at least one contact point, happening between two active bodies.
@@ -1110,7 +1171,7 @@ impl NarrowPhase {
         out_manifolds: &mut Vec<&'a mut ContactManifold>,
         out: &mut [Vec<ContactManifoldIndex>],
     ) {
-        for out_island in &mut out[..islands.num_islands()] {
+        for out_island in &mut out[..islands.active_islands().len()] {
             out_island.clear();
         }
 
@@ -1153,13 +1214,17 @@ impl NarrowPhase {
                         && (!rb_type1.is_dynamic() || !sleeping1)
                         && (!rb_type2.is_dynamic() || !sleeping2)
                     {
-                        let island_index = if !rb_type1.is_dynamic() {
-                            active_island_id2
+                        let island_awake_index = if !rb_type1.is_dynamic() {
+                            islands.islands[active_island_id2]
+                                .id_in_awake_list()
+                                .expect("Internal error: island should be awake.")
                         } else {
-                            active_island_id1
+                            islands.islands[active_island_id1]
+                                .id_in_awake_list()
+                                .expect("Internal error: island should be awake.")
                         };
 
-                        out[island_index].push(out_manifolds.len());
+                        out[island_awake_index].push(out_manifolds.len());
                         out_manifolds.push(manifold);
                         push_pair = true;
                     }
@@ -1170,5 +1235,287 @@ impl NarrowPhase {
                 out_contact_pairs.push(EdgeIndex::new(pair_id as u32));
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "f32")]
+#[cfg(feature = "dim3")]
+mod test {
+    use crate::math::Vector;
+    use crate::prelude::{
+        CCDSolver, ColliderBuilder, DefaultBroadPhase, IntegrationParameters, PhysicsPipeline,
+        RigidBodyBuilder,
+    };
+
+    use super::*;
+
+    /// Test for https://github.com/dimforge/rapier/issues/734.
+    #[test]
+    pub fn collider_set_parent_depenetration() {
+        // This tests the scenario:
+        // 1. Body A has two colliders attached (and overlapping), Body B has none.
+        // 2. One of the colliders from Body A gets re-parented to Body B.
+        //    -> Collision is properly detected between the colliders of A and B.
+        let mut rigid_body_set = RigidBodySet::new();
+        let mut collider_set = ColliderSet::new();
+
+        /* Create the ground. */
+        let collider = ColliderBuilder::ball(0.5);
+
+        /* Create body 1, which will contain both colliders at first. */
+        let rigid_body_1 = RigidBodyBuilder::dynamic()
+            .translation(Vector::new(0.0, 0.0, 0.0))
+            .build();
+        let body_1_handle = rigid_body_set.insert(rigid_body_1);
+
+        /* Create collider 1. Parent it to rigid body 1. */
+        let collider_1_handle =
+            collider_set.insert_with_parent(collider.build(), body_1_handle, &mut rigid_body_set);
+
+        /* Create collider 2. Parent it to rigid body 1. */
+        let collider_2_handle =
+            collider_set.insert_with_parent(collider.build(), body_1_handle, &mut rigid_body_set);
+
+        /* Create body 2. No attached colliders yet. */
+        let rigid_body_2 = RigidBodyBuilder::dynamic()
+            .translation(Vector::new(0.0, 0.0, 0.0))
+            .build();
+        let body_2_handle = rigid_body_set.insert(rigid_body_2);
+
+        /* Create other structures necessary for the simulation. */
+        let gravity = Vector::ZERO;
+        let integration_parameters = IntegrationParameters::default();
+        let mut physics_pipeline = PhysicsPipeline::new();
+        let mut island_manager = IslandManager::new();
+        let mut broad_phase = DefaultBroadPhase::new();
+        let mut narrow_phase = NarrowPhase::new();
+        let mut impulse_joint_set = ImpulseJointSet::new();
+        let mut multibody_joint_set = MultibodyJointSet::new();
+        let mut ccd_solver = CCDSolver::new();
+        let physics_hooks = ();
+        let event_handler = ();
+
+        physics_pipeline.step(
+            gravity,
+            &integration_parameters,
+            &mut island_manager,
+            &mut broad_phase,
+            &mut narrow_phase,
+            &mut rigid_body_set,
+            &mut collider_set,
+            &mut impulse_joint_set,
+            &mut multibody_joint_set,
+            &mut ccd_solver,
+            &physics_hooks,
+            &event_handler,
+        );
+        let collider_1_position = collider_set.get(collider_1_handle).unwrap().pos;
+        let collider_2_position = collider_set.get(collider_2_handle).unwrap().pos;
+        assert!(
+            (collider_1_position.translation - collider_2_position.translation).length() < 0.5f32
+        );
+
+        let contact_pair = narrow_phase
+            .contact_pair(collider_1_handle, collider_2_handle)
+            .expect("The contact pair should exist.");
+        assert_eq!(contact_pair.manifolds.len(), 0);
+        assert!(
+            narrow_phase
+                .intersection_pair(collider_1_handle, collider_2_handle)
+                .is_none(),
+            "Interaction pair is for sensors"
+        );
+        /* Parent collider 2 to body 2. */
+        collider_set.set_parent(collider_2_handle, Some(body_2_handle), &mut rigid_body_set);
+
+        physics_pipeline.step(
+            gravity,
+            &integration_parameters,
+            &mut island_manager,
+            &mut broad_phase,
+            &mut narrow_phase,
+            &mut rigid_body_set,
+            &mut collider_set,
+            &mut impulse_joint_set,
+            &mut multibody_joint_set,
+            &mut ccd_solver,
+            &physics_hooks,
+            &event_handler,
+        );
+
+        let contact_pair = narrow_phase
+            .contact_pair(collider_1_handle, collider_2_handle)
+            .expect("The contact pair should exist.");
+        assert_eq!(contact_pair.manifolds.len(), 1);
+        assert!(
+            narrow_phase
+                .intersection_pair(collider_1_handle, collider_2_handle)
+                .is_none(),
+            "Interaction pair is for sensors"
+        );
+
+        /* Run the game loop, stepping the simulation once per frame. */
+        for _ in 0..200 {
+            physics_pipeline.step(
+                gravity,
+                &integration_parameters,
+                &mut island_manager,
+                &mut broad_phase,
+                &mut narrow_phase,
+                &mut rigid_body_set,
+                &mut collider_set,
+                &mut impulse_joint_set,
+                &mut multibody_joint_set,
+                &mut ccd_solver,
+                &physics_hooks,
+                &event_handler,
+            );
+
+            let collider_1_position = collider_set.get(collider_1_handle).unwrap().pos;
+            let collider_2_position = collider_set.get(collider_2_handle).unwrap().pos;
+            println!("collider 1 position: {}", collider_1_position.translation);
+            println!("collider 2 position: {}", collider_2_position.translation);
+        }
+
+        let collider_1_position = collider_set.get(collider_1_handle).unwrap().pos;
+        let collider_2_position = collider_set.get(collider_2_handle).unwrap().pos;
+        println!("collider 2 position: {}", collider_2_position.translation);
+        assert!(
+            (collider_1_position.translation - collider_2_position.translation).length() >= 0.5f32,
+            "colliders should no longer be penetrating."
+        );
+    }
+
+    /// Test for https://github.com/dimforge/rapier/issues/734.
+    #[test]
+    pub fn collider_set_parent_no_self_intersection() {
+        // This tests the scenario:
+        // 1. Body A and Body B each have one collider attached.
+        //    -> There should be a collision detected between A and B.
+        // 2. The collider from Body B gets attached to Body A.
+        //    -> There should no longer be any collision between A and B.
+        // 3. Re-parent one of the collider from Body A to Body B again.
+        //    -> There should a collision again.
+        let mut rigid_body_set = RigidBodySet::new();
+        let mut collider_set = ColliderSet::new();
+
+        /* Create the ground. */
+        let collider = ColliderBuilder::ball(0.5);
+
+        /* Create body 1, which will contain collider 1. */
+        let rigid_body_1 = RigidBodyBuilder::dynamic()
+            .translation(Vector::new(0.0, 0.0, 0.0))
+            .build();
+        let body_1_handle = rigid_body_set.insert(rigid_body_1);
+
+        /* Create collider 1. Parent it to rigid body 1. */
+        let collider_1_handle =
+            collider_set.insert_with_parent(collider.build(), body_1_handle, &mut rigid_body_set);
+
+        /* Create body 2, which will contain collider 2 at first. */
+        let rigid_body_2 = RigidBodyBuilder::dynamic()
+            .translation(Vector::new(0.0, 0.0, 0.0))
+            .build();
+        let body_2_handle = rigid_body_set.insert(rigid_body_2);
+
+        /* Create collider 2. Parent it to rigid body 2. */
+        let collider_2_handle =
+            collider_set.insert_with_parent(collider.build(), body_2_handle, &mut rigid_body_set);
+
+        /* Create other structures necessary for the simulation. */
+        let gravity = Vector::ZERO;
+        let integration_parameters = IntegrationParameters::default();
+        let mut physics_pipeline = PhysicsPipeline::new();
+        let mut island_manager = IslandManager::new();
+        let mut broad_phase = DefaultBroadPhase::new();
+        let mut narrow_phase = NarrowPhase::new();
+        let mut impulse_joint_set = ImpulseJointSet::new();
+        let mut multibody_joint_set = MultibodyJointSet::new();
+        let mut ccd_solver = CCDSolver::new();
+        let physics_hooks = ();
+        let event_handler = ();
+
+        physics_pipeline.step(
+            gravity,
+            &integration_parameters,
+            &mut island_manager,
+            &mut broad_phase,
+            &mut narrow_phase,
+            &mut rigid_body_set,
+            &mut collider_set,
+            &mut impulse_joint_set,
+            &mut multibody_joint_set,
+            &mut ccd_solver,
+            &physics_hooks,
+            &event_handler,
+        );
+
+        let contact_pair = narrow_phase
+            .contact_pair(collider_1_handle, collider_2_handle)
+            .expect("The contact pair should exist.");
+        assert_eq!(
+            contact_pair.manifolds.len(),
+            1,
+            "There should be a contact manifold."
+        );
+
+        let collider_1_position = collider_set.get(collider_1_handle).unwrap().pos;
+        let collider_2_position = collider_set.get(collider_2_handle).unwrap().pos;
+        assert!(
+            (collider_1_position.translation - collider_2_position.translation).length() < 0.5f32
+        );
+
+        /* Parent collider 2 to body 1. */
+        collider_set.set_parent(collider_2_handle, Some(body_1_handle), &mut rigid_body_set);
+        physics_pipeline.step(
+            gravity,
+            &integration_parameters,
+            &mut island_manager,
+            &mut broad_phase,
+            &mut narrow_phase,
+            &mut rigid_body_set,
+            &mut collider_set,
+            &mut impulse_joint_set,
+            &mut multibody_joint_set,
+            &mut ccd_solver,
+            &physics_hooks,
+            &event_handler,
+        );
+
+        let contact_pair = narrow_phase
+            .contact_pair(collider_1_handle, collider_2_handle)
+            .expect("The contact pair should no longer exist.");
+        assert_eq!(
+            contact_pair.manifolds.len(),
+            0,
+            "Colliders with same parent should not be in contact together."
+        );
+
+        /* Parent collider 2 back to body 1. */
+        collider_set.set_parent(collider_2_handle, Some(body_2_handle), &mut rigid_body_set);
+        physics_pipeline.step(
+            gravity,
+            &integration_parameters,
+            &mut island_manager,
+            &mut broad_phase,
+            &mut narrow_phase,
+            &mut rigid_body_set,
+            &mut collider_set,
+            &mut impulse_joint_set,
+            &mut multibody_joint_set,
+            &mut ccd_solver,
+            &physics_hooks,
+            &event_handler,
+        );
+
+        let contact_pair = narrow_phase
+            .contact_pair(collider_1_handle, collider_2_handle)
+            .expect("The contact pair should exist.");
+        assert_eq!(
+            contact_pair.manifolds.len(),
+            1,
+            "There should be a contact manifold."
+        );
     }
 }

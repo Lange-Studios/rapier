@@ -1,7 +1,246 @@
-## Unreleased
+## v0.31.0 (09 Jan. 2026)
+
+### Modified
+
+- **Breaking:** Migrate math types from nalgebra to glam (via parry). The main type aliases are now:
+  - `Isometry<Real>` → `Pose` (glamx `Pose2/3`)
+  - `Point<Real>` → `Vector` for world-space positions (parry no longer distinguishes Point from Vector)
+  - `Rotation<Real>` → `Rotation` (glamx `Rot2` or `Quat`)
+  - `Translation<Real>` → removed, use `Pose::from_translation()`
+  - nalgebra is still used internally for SIMD code and multibody Jacobians (via `SimdVector<N>`, `SimdPose<N>`, `DVector`, `DMatrix`).
+- **Breaking:** Several getters now return by value instead of by reference:
+  - `RigidBody::linvel()` returns `Vector` instead of `&Vector<Real>`
+  - `RigidBody::angvel()` returns `AngVector` instead of `&Vector<Real>` (3D) or `Real` (2D)
+  - `RigidBody::center_of_mass()` returns `Vector` instead of `&Point<Real>`
+  - `RigidBody::local_center_of_mass()` returns `Vector` instead of `&Point<Real>`
+  - `Collider::translation()` returns `Vector` instead of `&Vector<Real>`
+  - `Collider::rotation()` returns `Rotation` instead of `&Rotation<Real>`
+- **Breaking:** `DebugRenderBackend::draw_line` signature changed: takes `Vector` instead of `Point<Real>` for line endpoints.
+- **Breaking:** `DebugRenderBackend::draw_polyline` and `draw_line_strip` now take `&Pose` and `Vector` instead of `&Isometry<Real>` and `&Vector<Real>`.
+- Testbed migrated from Bevy to kiss3d for lighter dependencies and simpler maintenance.
+- Removed `benchmarks2d` and `benchmarks3d` crates (merged with `examples2d` and `examples3d`).
+
+### Migration guide
+
+If your codebase currently relies on `nalgebra`, note that `nalgebra` and `glamx` provide type conversion. Enable the
+corresponding features:
+- `nalgebra = { version = "0.34", features = [ "convert-glam030" ] }`
+- `glamx = { version = "0.1", features = ["nalgebra"] }`
+then you can convert between `glam` and `nalgebra` types using `.into()`.
+
+1. **Type changes:** Replace `Isometry<Real>` with `Pose`, and `Point<Real>` with `Vector` for positions.
+2. **Pose construction:**
+   - `Isometry::identity()` → `Pose::IDENTITY`
+   - `Isometry::translation(x, y, z)` → `Pose::from_translation(Vector::new(x, y, z))`
+   - `Isometry::rotation(axis_angle)` → `Pose::from_rotation(Rotation::from_scaled_axis(axis_angle))`
+   - `isometry.translation.vector` → `pose.translation`
+   - `isometry.rotation.scaled_axis()` → `pose.rotation.to_scaled_axis()`
+3. **Getter usage:** Remove `&` or `.clone()` when using `linvel()`, `angvel()`, `center_of_mass()`, `translation()`, `rotation()` since they now return by value.
+4. **Debug renderer:** Update `DebugRenderBackend` implementations to use `Vector` instead of `Point<Real>`.
+5. **glam access:** The `glamx` crate is re-exported as `rapier::glamx` for direct glam type access if needed.
+
+## v0.31.0 (21 Nov. 2025)
+
+- `InteractionGroups` struct now contains `InteractionTestMode`.
+  Continues [rapier/pull/170](https://github.com/dimforge/rapier/pull/170)
+  for [rapier/issues/622](https://github.com/dimforge/rapier/issues/622)
+- `InteractionGroups` constructor now requires an `InteractionTestMode` parameter. If you want same behaviour as before,
+  use `InteractionTestMode::And` (eg.
+  `InteractionGroups::new(Group::GROUP_1, Group::GROUP_1, InteractionTestMode::And)`)
+- `CoefficientCombineRule::Min` - now makes sure it uses a non zero value as result by using `coeff1.min(coeff2).abs()`
+- `InteractionTestMode`: Specifies which method should be used to test interactions. Supports `AND` and `OR`.
+- `CoefficientCombineRule::ClampedSum` - Adds the two coefficients and does a clamp to have at most 1.
+- Rename `ColliderChanges::CHANGED` to `::IN_CHANGED_SET` to make its meaning more precise.
+- Rename `RigidBodyChanges::CHANGED` to `::IN_CHANGED_SET` to make its meaning more precise.
+- Fix colliders ignoring user-changes after the first simulation step.
+- Fix broad-phase incorrectly taking into account disabled colliders attached to an enabled dynamic rigid-body.
+- Grouped `IntegrationParameters::contact_natural_frequency` and `IntegrationParameters::contact_damping_ratio` behind
+  a single `IntegrationParameters::contact_softness` (#789).
+- Removed the `Integration_parameters` methods related to `erp` and `cfm`. They are now methods of the
+  `IntegrationParameters::softness` and `GenericJoint::softness` fields (#789).
+- Removed `IntegrationParameters::joint_natural_frequency` and `IntegrationParameters::joint_damping_ratio` in favor of
+  per-joint softness coefficients `GenericJoint::softness` (#789).
+- Make `SolverContact::contact_id` public so that user code knows what geometric contact it originates from (#888).
+
+## v0.30.1 (17 Oct. 2025)
+
+- Kinematic rigid-bodies will no longer fall asleep if they have a nonzero velocity, even if that velocity is very
+  small. The rationale is that, since that velocity is chosen by the user, they really want the platform to move even
+  if the speed is low.
+- Fix bug where kinematic bodies would ignore the `wake_up` flag passed to `set_linear_velocity` and
+  `set_angular_velocity`.
+- Add serde derives to `PdController`, `PidController` and `DynamicRaycastVehicle` controllers.
+
+## v0.30.0 (03 Oct. 2025)
+
+- Update to parry 0.25 (which involves breaking changes in the `Voxels` API but improves its internal storage to support
+  large voxel maps).
+
+## v0.29.0 (05 Sept. 2025)
+
+This version contains a significant rework of the internal velocity constraints solver.
+This makes it both simpler and more optimized (making the whole simulation up to 25% faster). For details on all the
+changes, see [#876](https://github.com/dimforge/rapier/pull/876).
+
+Notable changes include:
+
+- Update to parry 0.24 (includes a breaking change where all the `*angular_inertia_sqrt` fields and functions have been
+  replaced by their non-square-root equivalent.
+- Fixed bug where friction on kinematic bodies would affect dynamic bodies much more weakly than it should.
+- In 3D, added a new friction model that is more efficient than the traditional Coulomb friction. This new simplified
+  model is enabled by default and can be changed with `IntegrationParameters::friction_model`.
+- Removed support for the legacy PGS solver. Removed `IntegrationParameters::pgs_legacy` and
+  `::tgs_soft_without_warmstart`.
+
+## v0.28.0 (08 August 2025)
+
+### Modified
+
+- Update to nalgebra 0.34 and parry 0.23.
+- Only run the broad-phase once at the beginning of the physics step.
+- Don’t rebuild a BVH from scratch for CCD. Instead, reuse the broad-phase bvh with localized changes.
+- The public methods of `IslandSolver` has changed slightly to take the broad-phase as input.
+- Removed the `BroadPhase` trait and use the BVH broad-phase directly instead of a trait-object.
 
 ### Added
-- Implement rotation gizmo for Ball 2D shape (as radius line) in Debug renderer if `DebugRenderMode::COLLIDER_SHAPES` enabled
+
+- Add `Collider::compute_broad_phase_aabb` to compute the AABB to be used by the broad-phase, taking
+  into account its contact skin, prediction, and soft-ccd.
+
+### Fix
+
+- Fix issue where some solver contacts would disappear from the contact graph before the user
+  had a chance to read them.
+
+## v0.27.0 (24 July 2025)
+
+### Modified
+
+- Modified the `QueryPipeline` API to take some geometric elements by-value instead of by-reference to make them
+  easier to use.
+- Modified the character controller to take the query-pipeline by reference instead of by-value.
+
+### Fixed
+
+- Fix crash in the new BVH broad-phase when removing colliders in a particular order.
+
+## v0.27.0-beta.0 (11 July 2025)
+
+### Modified
+
+- Replace the hierarchical SAP broad-phase by a broad-phase based on parry’s new BVH structure.
+- The `QueryPipeline` is now and ephemeral object obtained from the broad-phase with `broad_phase.as_query_pipeline()`.
+  It no longer needs to be updated separately from the broad-phase.
+
+### Fixed
+
+- Fix NaN resulting from non-clamped input to simd_asin in angular motor solver.
+
+## v0.26.1 (23 May 2025)
+
+### Added
+
+- Add `RigidBodySet::get_pair_mut` and `ColliderSet::get_pair_mut` to get two mutable rigid-bodies or colliders
+  simultaneously.
+
+## v0.26.0 (16 May 2025)
+
+### Modified
+
+- Update to parry 0.21.0. This changes the initialization of `Voxels` colliders by removing the primitive geometry
+  argument. This also fixes intersection checks with voxels, and force calculation between voxels and other
+  voxels or compound shapes.
+
+## v0.25.1 (02 May 2025)
+
+### Modified
+
+- Pin parry version to 0.20.1.
+
+## v0.25.0 (24 April 2025)
+
+### Added
+
+- Added support for parry’s new `Voxels` collider shape with `ColliderBuilder::voxels`,
+  `ColliderBuilder::voxels_from_points`, and `ColliderBuilder::voxelized_mesh`.
+- `MeshConverter` now implements `Copy`.
+
+### Modified
+
+- Update parry to 0.20.0.
+
+## v0.24.0 (10 April 2025)
+
+### Added
+
+- `IntegrationParameters` now implements `PartialEq`.
+
+### Modified
+
+- Update dependencies (including `parry` 0.19).
+
+## v0.23.1 (05 March 2025)
+
+### Added
+
+- Add `PdController` and `PidController` for making it easier to control dynamic rigid-bodies at the velocity level.
+  This can for example be used as a building block for a dynamic character controller.
+- Add `RigidBodyPosition::pose_errors` to compute the translational and rotational delta between
+  `RigidBodyPosition::position` and `::next_position`.
+- Implement `Sub` for `RigidBodyVelocity`.
+- Add `RigidBody::local_center_of_mass()` to get its center-of-mass in the rigid-body’s local-space.
+
+## v0.23.0 (08 Jan 2025)
+
+### Fix
+
+- The broad-phase region key has been replaced by an i64 in the f64 version of rapier, increasing the range before
+  panics occur.
+- Fix `BroadphaseMultiSap` not being able to serialize correctly with serde_json.
+- Fix `KinematicCharacterController::move_shape` not respecting parameters `max_slope_climb_angle` and
+  `min_slope_slide_angle`.
+- Improve ground detection reliability for `KinematicCharacterController`. (#715)
+- Fix wasm32 default values for physics hooks filter to be consistent with native: `COMPUTE_IMPULSES`.
+- Fix changing a collider parent when ongoing collisions should be affected (#742):
+    - Fix collisions not being removed when a collider is parented to a rigidbody while in collision with it.
+    - Fix collisions not being added when the parent was removed while intersecting a (previously) sibling collider.
+
+### Added
+
+- `RigidBodySet` and `ColliderSet` have a new constructor `with_capacity`.
+- Use `profiling` crate to provide helpful profiling information in different tools.
+    - The testbeds have been updated to use `puffin_egui`
+
+### Modified
+
+- `InteractionGroups` default value for `memberships` is now `GROUP_1` (#706)
+- `ImpulseJointSet::get_mut` has a new parameter `wake_up: bool`, to wake up connected bodies.
+- Removed unmaintained `instant` in favor of `web-time`. This effectively removes the `wasm-bindgen` transitive
+  dependency as it's no longer needed.
+- Significantly improve performances of `QueryPipeline::intersection_with_shape`.
+
+## v0.22.0 (20 July 2024)
+
+### Fix
+
+- Fix crash when removing a multibody joint, or a rigid-body with a multipody-joint attached to it.
+- Fix crash when inserting multibody joints in an arbitrary order (instead of incrementally from root to leaf).
+- Fix `BroadphaseMultiSap` not being able to serialize a field with serde_json.
+
+### Added
+
+- Implement rotation gizmo for Ball 2D shape (as radius line) in Debug renderer if `DebugRenderMode::COLLIDER_SHAPES`
+  enabled
+- Implement `Debug` for `ColliderSet`, `InteractionGraph`,
+  `MultibodyLink`, `MultibodyJointSet`, `Multibody`, `ImpulseJointSet`
+
+### Modified
+
+- Update parry to v0.17. Refer to [its changelog](https://github.com/dimforge/parry/blob/master/CHANGELOG.md#v0170) for
+  further details.
+- Divided by two the value of each `QueryFilterFlags` variant so that
+  the smallest one is 1 instead of 2 (fixes a bug in rapier.js).
+- `BroadphaseMultiSap` now serializes its `colliders_proxy_ids` as `Vec[(ColliderHandle, BroadPhaseProxyIndex)]`.
 
 ## v0.21.0 (23 June 2024)
 
@@ -45,9 +284,9 @@ This release introduces two new crates:
 
 ### Modified
 
-- Renamed `JointAxesMask::X/Y/Z` to `::LIN_X/LIN_Y/LIN_Z`; and renamed `JointAxisMask::X/Y/Z` to `::LinX/LinY/LynZ` to
+- Renamed `JointAxesMask::X/Y/Z` to `::LIN_X/LIN_Y/LIN_Z`; and renamed `JointAxesMask::X/Y/Z` to `::LinX/LinY/LynZ` to
   make it clear it is not to be used as angular axes (the angular axis are `JointAxesMask::ANG_X/ANG_Y/AngZ` and
-  `JointAxisMask::AngX/AngY/AngZ`).
+  `JointAxesMask::AngX/AngY/AngZ`).
 - The contact constraints regularization parameters have been changed from `erp/damping_ratio` to
   `natural_frequency/damping_ratio`. This helps define them in a timestep-length independent way. The new variables
   are named `IntegrationParameters::contact_natural_frequency` and `IntegrationParameters::contact_damping_ratio`.
@@ -68,7 +307,7 @@ This release introduces two new crates:
 - Rename `JointAxis::X/Y/Z` to `::LinX/LinY/LinZ` to avoid confusing it with `::AngX/AngY/AngZ`.
 - Rename `JointAxesMask::X/Y/Z` to `::LIN_X/LIN_Y/LIN_Z` to avoid confusing it with `::ANG_X/ANG_Y/ANG_Z`.
 - The function `RigidBody::add_collider` is now private. It was only public because it was needed for some internal
-  `bevy_rapier` plumbings, but it is no longer useful. Adding a collider must always go througthe `ColliderSet`.
+  `bevy_rapier` plumbings, but it is no longer useful. Adding a collider must always go through the `ColliderSet`.
 - `CharacterController::solve_character_collision_impulses` now takes multiple `CharacterCollision` as parameter:
   this change will allow further internal optimizations.
 - `QueryPipeline::update` now doesn't need the `RigidBodySet` as parameter.
@@ -704,7 +943,8 @@ Several new shape types are now supported:
 
 It is possible to build `ColliderDesc` using these new shapes:
 
-- `ColliderBuilder::round_cuboid`, `ColliderBuilder::segment`, `ColliderBuilder::triangle`, `ColliderBuilder::round_triangle`,
+- `ColliderBuilder::round_cuboid`, `ColliderBuilder::segment`, `ColliderBuilder::triangle`,
+  `ColliderBuilder::round_triangle`,
   `ColliderBuilder::convex_hull`, `ColliderBuilder::round_convex_hull`, `ColliderBuilder::polyline`,
   `ColliderBuilder::convex_decomposition`, `ColliderBuilder::round_convex_decomposition`,
   `ColliderBuilder::convex_polyline` (2D only), `ColliderBuilder::round_convex_polyline` (2D only),

@@ -1,5 +1,5 @@
-use rapier3d::prelude::*;
 use rapier_testbed3d::Testbed;
+use rapier3d::prelude::*;
 
 #[derive(serde::Deserialize)]
 struct State {
@@ -17,7 +17,10 @@ pub fn init_world(testbed: &mut Testbed) {
     /*
      * Set up the testbed.
      */
-    let bytes = std::fs::read("state.bin").unwrap();
+    let Ok(bytes) = std::fs::read("state.bin") else {
+        println!("Failed to load serialized world state.");
+        return;
+    };
     let state: State = bincode::deserialize(&bytes).unwrap();
 
     testbed.set_world(
@@ -31,6 +34,6 @@ pub fn init_world(testbed: &mut Testbed) {
     testbed.harness_mut().physics.narrow_phase = state.narrow_phase;
     testbed.harness_mut().physics.ccd_solver = state.ccd_solver;
 
-    testbed.set_graphics_shift(vector![-541.0, -6377257.0, -61.0]);
-    testbed.look_at(point![10.0, 10.0, 10.0], point![0.0, 0.0, 0.0]);
+    testbed.set_graphics_shift([-541.0, -6377257.0, -61.0].into());
+    testbed.look_at([10.0, 10.0, 10.0].into(), [0.0, 0.0, 0.0].into());
 }

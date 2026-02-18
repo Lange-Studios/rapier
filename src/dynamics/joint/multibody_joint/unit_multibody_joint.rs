@@ -1,10 +1,10 @@
 #![allow(missing_docs)] // For downcast.
 
+use crate::dynamics::integration_parameters::SpringCoefficients;
 use crate::dynamics::joint::MultibodyLink;
-use crate::dynamics::solver::{JointGenericOneBodyConstraint, WritebackId};
+use crate::dynamics::solver::{GenericJointConstraint, WritebackId};
 use crate::dynamics::{IntegrationParameters, JointMotor, Multibody};
-use crate::math::Real;
-use na::DVector;
+use crate::math::{DVector, Real};
 
 /// Initializes and generate the velocity constraints applicable to the multibody links attached
 /// to this multibody_joint.
@@ -16,15 +16,19 @@ pub fn unit_joint_limit_constraint(
     curr_pos: Real,
     dof_id: usize,
     j_id: &mut usize,
-    jacobians: &mut DVector<Real>,
-    constraints: &mut [JointGenericOneBodyConstraint],
+    jacobians: &mut DVector,
+    constraints: &mut [GenericJointConstraint],
     insert_at: &mut usize,
+    softness: SpringCoefficients<Real>,
 ) {
     let ndofs = multibody.ndofs();
     let min_enabled = curr_pos < limits[0];
     let max_enabled = limits[1] < curr_pos;
-    let erp_inv_dt = params.joint_erp_inv_dt();
-    let cfm_coeff = params.joint_cfm_coeff();
+
+    // Compute per-joint ERP and CFM
+    let erp_inv_dt = softness.erp_inv_dt(params.dt);
+    let cfm_coeff = softness.cfm_coeff(params.dt);
+
     let rhs_bias = ((curr_pos - limits[1]).max(0.0) - (limits[0] - curr_pos).max(0.0)) * erp_inv_dt;
     let rhs_wo_bias = 0.0;
 
@@ -42,11 +46,17 @@ pub fn unit_joint_limit_constraint(
         max_enabled as u32 as Real * Real::MAX,
     ];
 
-    let constraint = JointGenericOneBodyConstraint {
+    let constraint = GenericJointConstraint {
+        is_rigid_body1: false,
+        solver_vel1: u32::MAX,
+        ndofs1: 0,
+        j_id1: 0,
+
+        is_rigid_body2: false,
         solver_vel2: multibody.solver_id,
         ndofs2: ndofs,
         j_id2: *j_id,
-        joint_id: usize::MAX,
+        joint_id: usize::MAX, // TODO: we don’t support impulse writeback for internal constraints yet.
         impulse: 0.0,
         impulse_bounds,
         inv_lhs: crate::utils::inv(lhs),
@@ -74,8 +84,8 @@ pub fn unit_joint_motor_constraint(
     limits: Option<[Real; 2]>,
     dof_id: usize,
     j_id: &mut usize,
-    jacobians: &mut DVector<Real>,
-    constraints: &mut [JointGenericOneBodyConstraint],
+    jacobians: &mut DVector,
+    constraints: &mut [GenericJointConstraint],
     insert_at: &mut usize,
 ) {
     let inv_dt = params.inv_dt();
@@ -108,11 +118,17 @@ pub fn unit_joint_motor_constraint(
 
     rhs_wo_bias += -target_vel;
 
-    let constraint = JointGenericOneBodyConstraint {
+    let constraint = GenericJointConstraint {
+        is_rigid_body1: false,
+        solver_vel1: u32::MAX,
+        ndofs1: 0,
+        j_id1: 0,
+
+        is_rigid_body2: false,
         solver_vel2: multibody.solver_id,
         ndofs2: ndofs,
         j_id2: *j_id,
-        joint_id: usize::MAX,
+        joint_id: usize::MAX, // TODO: we don’t support impulse writeback for internal constraints yet.
         impulse: 0.0,
         impulse_bounds,
         cfm_coeff: motor_params.cfm_coeff,

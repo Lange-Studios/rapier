@@ -10,12 +10,12 @@ pub struct StagesCounters {
     pub collision_detection_time: Timer,
     /// Time spent for the computation of collision island and body activation/deactivation (sleeping).
     pub island_construction_time: Timer,
+    /// Time spent for collecting awake constraints from islands.
+    pub island_constraints_collection_time: Timer,
     /// Total time spent for the constraints resolution and position update.t
     pub solver_time: Timer,
     /// Total time spent for CCD and CCD resolution.
     pub ccd_time: Timer,
-    /// Total time spent updating the query pipeline (if provided to `PhysicsPipeline::step`).
-    pub query_pipeline_time: Timer,
     /// Total time spent propagating user changes.
     pub user_changes: Timer,
 }
@@ -27,9 +27,9 @@ impl StagesCounters {
             update_time: Timer::new(),
             collision_detection_time: Timer::new(),
             island_construction_time: Timer::new(),
+            island_constraints_collection_time: Timer::new(),
             solver_time: Timer::new(),
             ccd_time: Timer::new(),
-            query_pipeline_time: Timer::new(),
             user_changes: Timer::new(),
         }
     }
@@ -39,9 +39,9 @@ impl StagesCounters {
         self.update_time.reset();
         self.collision_detection_time.reset();
         self.island_construction_time.reset();
+        self.island_constraints_collection_time.reset();
         self.solver_time.reset();
         self.ccd_time.reset();
-        self.query_pipeline_time.reset();
         self.user_changes.reset();
     }
 }
@@ -59,9 +59,13 @@ impl Display for StagesCounters {
             "Island construction time: {}",
             self.island_construction_time
         )?;
+        writeln!(
+            f,
+            "Island construction time: {}",
+            self.island_constraints_collection_time
+        )?;
         writeln!(f, "Solver time: {}", self.solver_time)?;
         writeln!(f, "CCD time: {}", self.ccd_time)?;
-        writeln!(f, "Query pipeline time: {}", self.query_pipeline_time)?;
         writeln!(f, "User changes time: {}", self.user_changes)
     }
 }

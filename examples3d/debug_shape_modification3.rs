@@ -1,5 +1,5 @@
-use rapier3d::prelude::*;
 use rapier_testbed3d::Testbed;
+use rapier3d::prelude::*;
 
 pub fn init_world(testbed: &mut Testbed) {
     /*
@@ -16,7 +16,7 @@ pub fn init_world(testbed: &mut Testbed) {
     let ground_size = 20.0;
     let ground_height = 0.1;
 
-    let rigid_body = RigidBodyBuilder::fixed().translation(vector![0.0, -ground_height, 0.0]);
+    let rigid_body = RigidBodyBuilder::fixed().translation(Vector::new(0.0, -ground_height, 0.0));
     let ground_handle = bodies.insert(rigid_body);
     let collider = ColliderBuilder::cuboid(ground_size, ground_height, ground_size)
         .friction(0.15)
@@ -29,28 +29,56 @@ pub fn init_world(testbed: &mut Testbed) {
      */
     let ball_rad = 0.1;
     let rb = RigidBodyBuilder::dynamic()
-        .translation(vector![0.0, 0.2, 0.0])
-        .linvel(vector![10.0, 0.0, 0.0]);
+        .translation(Vector::new(0.0, 0.2, 0.0))
+        .linvel(Vector::new(10.0, 0.0, 0.0));
     let ball_handle = bodies.insert(rb);
     let collider = ColliderBuilder::ball(ball_rad).density(100.0);
     let ball_coll_handle = colliders.insert_with_parent(collider, ball_handle, &mut bodies);
 
-    let mut linvel = Vector::zeros();
-    let mut angvel = Vector::zeros();
-    let mut pos = Isometry::identity();
+    /*
+     * Colliders without bodies
+     */
+    let shape_size = 3.0;
+    let static_collider =
+        ColliderBuilder::ball(shape_size).translation(Vector::new(-15.0, shape_size, 18.0));
+    colliders.insert(static_collider);
+
+    let shapes = [
+        SharedShape::ball(shape_size),
+        SharedShape::cuboid(shape_size, shape_size, shape_size),
+        SharedShape::cone(shape_size, shape_size),
+        SharedShape::cylinder(shape_size, shape_size),
+    ];
+    let mut shape_idx = 0;
+    let shapeshifting_collider = ColliderBuilder::new(shapes[shape_idx].clone())
+        .translation(Vector::new(-15.0, shape_size, 9.0));
+    let shapeshifting_coll_handle = colliders.insert(shapeshifting_collider);
+
+    let mut linvel = Vector::ZERO;
+    let mut angvel = AngVector::ZERO;
+    let mut pos = Pose::IDENTITY;
     let mut step = 0;
     let snapped_frame = 51;
 
-    testbed.add_callback(move |_, physics, _, _| {
+    testbed.add_callback(move |mut gfx, physics, _, _| {
         step += 1;
 
         // Snap the ball velocity or restore it.
         let ball = physics.bodies.get_mut(ball_handle).unwrap();
 
         if step == snapped_frame {
-            linvel = *ball.linvel();
-            angvel = *ball.angvel();
+            linvel = ball.linvel();
+            angvel = ball.angvel();
             pos = *ball.position();
+        }
+
+        let shapeshifting_coll = physics
+            .colliders
+            .get_mut(shapeshifting_coll_handle)
+            .unwrap();
+        if step % 50 == 0 {
+            shape_idx = (shape_idx + 1) % 4;
+            shapeshifting_coll.set_shape(shapes[shape_idx].clone())
         }
 
         if step == 100 {
@@ -62,6 +90,11 @@ pub fn init_world(testbed: &mut Testbed) {
 
         let ball_coll = physics.colliders.get_mut(ball_coll_handle).unwrap();
         ball_coll.set_shape(SharedShape::ball(ball_rad * step as f32 * 2.0));
+
+        if let Some(gfx) = &mut gfx {
+            gfx.update_collider(ball_coll_handle, &physics.colliders);
+            gfx.update_collider(shapeshifting_coll_handle, &physics.colliders);
+        }
     });
 
     /*
@@ -87,7 +120,7 @@ pub fn init_world(testbed: &mut Testbed) {
                 let z = k as f32 * shiftz - centerz + offset;
 
                 // Build the rigid body.
-                let rigid_body = RigidBodyBuilder::dynamic().translation(vector![x, y, z]);
+                let rigid_body = RigidBodyBuilder::dynamic().translation(Vector::new(x, y, z));
                 let handle = bodies.insert(rigid_body);
 
                 let collider = match j % 5 {
@@ -111,5 +144,5 @@ pub fn init_world(testbed: &mut Testbed) {
      * Set up the testbed.
      */
     testbed.set_world(bodies, colliders, impulse_joints, multibody_joints);
-    testbed.look_at(point![10.0, 10.0, 10.0], Point::origin());
+    testbed.look_at(Vec3::new(40.0, 40.0, 40.0), Vec3::ZERO);
 }

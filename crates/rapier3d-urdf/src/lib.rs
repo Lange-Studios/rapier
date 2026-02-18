@@ -1,4 +1,4 @@
-//! ## STL loader for the Rapier physics engine
+//! ## URDF loader for the Rapier physics engine
 //!
 //! Rapier is a set of 2D and 3D physics engines for games, animation, and robotics. The `rapier3d-urdf`
 //! crate lets you convert an URDF file into a set of rigid-bodies, colliders, and joints, for usage with the
@@ -7,6 +7,8 @@
 //! ## Optional cargo features
 //!
 //! - `stl`: enables loading STL meshes referenced by the URDF file.
+//! - `collada`: enables loading Collada (`.dae`) meshes referenced by the URDF file.
+//! - `wavefront`: enables loading Wavefront (`.obj`) meshes referenced by the URDF file.
 //!
 //! ## Limitations
 //!
@@ -14,8 +16,8 @@
 //! improve
 //! these elements are very welcome!
 //!
-//! - Mesh file types other than `stl` are not supported yet. Contributions are welcome. You my check the `rapier3d-stl`
-//! repository for an example of mesh loader.
+//! - Mesh file types are limited. Contributions are welcome. You may check the `rapier3d-meshloader`
+//!   repository for an example of mesh loader.
 //! - When inserting joints as multibody joints, they will be reset to their neutral position (all coordinates = 0).
 //! - The following fields are currently ignored:
 //!     - `Joint::dynamics`
@@ -32,16 +34,17 @@ use rapier3d::{
         JointAxis, MassProperties, MultibodyJointHandle, MultibodyJointSet, RigidBody,
         RigidBodyBuilder, RigidBodyHandle, RigidBodySet, RigidBodyType,
     },
-    geometry::{
-        Collider, ColliderBuilder, ColliderHandle, ColliderSet, MeshConverter, SharedShape,
-        TriMeshFlags,
-    },
-    math::{Isometry, Point, Real, Vector},
+    geometry::{Collider, ColliderBuilder, ColliderHandle, ColliderSet, SharedShape, TriMeshFlags},
+    glamx::EulerRot,
+    math::{Pose, Real, Rotation, Vector},
     na,
 };
 use std::collections::HashMap;
 use std::path::Path;
-use xurdf::{Geometry, Inertial, Joint, Pose, Robot};
+use urdf_rs::{Geometry, Inertial, Joint, Pose as UrdfPose, Robot};
+
+#[cfg(doc)]
+use rapier3d::dynamics::Multibody;
 
 bitflags::bitflags! {
     /// Options applied to multibody joints created from the URDF joints.
@@ -79,7 +82,7 @@ pub struct UrdfLoaderOptions {
     /// So if this option is set to `true`, it is recommended to also keep
     /// [`UrdfLoaderOptions::enable_joint_collisions`] set to `false`. If the model is then added
     /// to the physics sets using multibody joints, it is recommended to call
-    /// [`UrdfRobot::insert_with_multibody_joints`] with the [`UrdfMultibodyOptions::DISABLE_SELF_CONTACTS`]
+    /// [`UrdfRobot::insert_using_multibody_joints`] with the [`UrdfMultibodyOptions::DISABLE_SELF_CONTACTS`]
     /// flag enabled.
     pub create_colliders_from_visual_shapes: bool,
     /// If `true`, the mass properties (center-of-mass, mass, and angular inertia) read from the urdf
@@ -102,8 +105,8 @@ pub struct UrdfLoaderOptions {
     /// Note that the default enables all the flags. This is operating under the assumption that the provided
     /// mesh are generally well-formed and properly oriented (2-manifolds with outward normals).
     pub trimesh_flags: TriMeshFlags,
-    /// The transform appended to every created rigid-bodies (default: [`Isometry::identity`]).
-    pub shift: Isometry<Real>,
+    /// The transform appended to every created rigid-bodies (default: `Pose::IDENTITY`).
+    pub shift: Pose,
     /// A description of the collider properties that need to be applied to every collider created
     /// by the loader (default: `ColliderBuilder::default().density(0.0)`).
     ///
@@ -134,7 +137,7 @@ impl Default for UrdfLoaderOptions {
             enable_joint_collisions: false,
             make_roots_fixed: false,
             trimesh_flags: TriMeshFlags::all(),
-            shift: Isometry::identity(),
+            shift: Pose::IDENTITY,
             collider_blueprint: ColliderBuilder::default().density(0.0),
             rigid_body_blueprint: RigidBodyBuilder::dynamic(),
         }
@@ -206,33 +209,6 @@ pub struct UrdfRobotHandles<JointHandle> {
     pub joints: Vec<UrdfJointHandle<JointHandle>>,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
-enum JointType {
-    #[default]
-    Fixed,
-    Revolute,
-    Continuous,
-    Floating,
-    Planar,
-    Prismatic,
-    Spherical,
-}
-
-impl JointType {
-    fn from_str(str: &str) -> Option<Self> {
-        match str {
-            "fixed" | "Fixed" => Some(Self::Fixed),
-            "continuous" | "Continuous" => Some(Self::Continuous),
-            "revolute" | "Revolute" => Some(Self::Revolute),
-            "floating" | "Floating" => Some(Self::Floating),
-            "planar" | "Planar" => Some(Self::Planar),
-            "prismatic" | "Prismatic" => Some(Self::Prismatic),
-            "spherical" | "Spherical" => Some(Self::Spherical),
-            _ => None,
-        }
-    }
-}
-
 impl UrdfRobot {
     /// Parses a URDF file and returns both the rapier objects (`UrdfRobot`) and the original urdf
     /// structures (`Robot`). Both structures are arranged the same way, with matching indices for each part.
@@ -246,9 +222,9 @@ impl UrdfRobot {
     /// - `path`: the path of the URDF file.
     /// - `options`: customize the creation of rapier objects from the URDF description.
     /// - `mesh_dir`: the base directory containing the meshes referenced by the URDF file. When
-    ///               a mesh reference is found in the URDF file, this `mesh_dir` is appended
-    ///               to the file path. If `mesh_dir` is `None` then the mesh directory is assumed
-    ///               to be the same directory as the one containing the URDF file.
+    ///   a mesh reference is found in the URDF file, this `mesh_dir` is appended
+    ///   to the file path. If `mesh_dir` is `None` then the mesh directory is assumed
+    ///   to be the same directory as the one containing the URDF file.
     pub fn from_file(
         path: impl AsRef<Path>,
         options: UrdfLoaderOptions,
@@ -258,7 +234,7 @@ impl UrdfRobot {
         let mesh_dir = mesh_dir
             .or_else(|| path.parent())
             .unwrap_or_else(|| Path::new("./"));
-        let robot = xurdf::parse_urdf_from_file(&path)?;
+        let robot = urdf_rs::read_file(&path)?;
         Ok((Self::from_robot(&robot, options, mesh_dir), robot))
     }
 
@@ -274,14 +250,14 @@ impl UrdfRobot {
     /// - `str`: the string content of an URDF file.
     /// - `options`: customize the creation of rapier objects from the URDF description.
     /// - `mesh_dir`: the base directory containing the meshes referenced by the URDF file. When
-    ///               a mesh reference is found in the URDF file, this `mesh_dir` is appended
-    ///               to the file path.
+    ///   a mesh reference is found in the URDF file, this `mesh_dir` is appended
+    ///   to the file path.
     pub fn from_str(
         str: &str,
         options: UrdfLoaderOptions,
         mesh_dir: &Path,
     ) -> anyhow::Result<(Self, Robot)> {
-        let robot = xurdf::parse_urdf_from_string(str)?;
+        let robot = urdf_rs::read_from_string(str)?;
         Ok((Self::from_robot(&robot, options, mesh_dir), robot))
     }
 
@@ -289,7 +265,7 @@ impl UrdfRobot {
     /// (`UrdfRobot`). Both structures are arranged the same way, with matching indices for each part.
     ///
     /// If the URDF file references external meshes, they will be loaded automatically if the format
-    /// is supported. The format is detected from the file’s extension. All the mesh formats are
+    /// is supported. The format is detected mostly from the file’s extension. All the mesh formats are
     /// disabled by default and can be enabled through cargo features (e.g. the `stl` feature of
     /// this crate enabled loading referenced meshes in stl format).
     ///
@@ -297,8 +273,8 @@ impl UrdfRobot {
     /// - `robot`: the robot loaded from an URDF file.
     /// - `options`: customize the creation of rapier objects from the URDF description.
     /// - `mesh_dir`: the base directory containing the meshes referenced by the URDF file. When
-    ///               a mesh reference is found in the URDF file, this `mesh_dir` is appended
-    ///               to the file path.
+    ///   a mesh reference is found in the URDF file, this `mesh_dir` is appended
+    ///   to the file path.
     pub fn from_robot(robot: &Robot, options: UrdfLoaderOptions, mesh_dir: &Path) -> Self {
         let mut name_to_link_id = HashMap::new();
         let mut link_is_root = vec![true; robot.links.len()];
@@ -310,17 +286,18 @@ impl UrdfRobot {
                 name_to_link_id.insert(&link.name, id);
                 let mut colliders = vec![];
                 if options.create_colliders_from_collision_shapes {
-                    colliders.extend(link.collisions.iter().filter_map(|co| {
-                        urdf_to_collider(&options, mesh_dir, &co.geometry, &co.origin)
+                    colliders.extend(link.collision.iter().flat_map(|co| {
+                        urdf_to_colliders(&options, mesh_dir, &co.geometry, &co.origin)
                     }))
                 }
                 if options.create_colliders_from_visual_shapes {
-                    colliders.extend(link.visuals.iter().filter_map(|vis| {
-                        urdf_to_collider(&options, mesh_dir, &vis.geometry, &vis.origin)
+                    colliders.extend(link.visual.iter().flat_map(|vis| {
+                        urdf_to_colliders(&options, mesh_dir, &vis.geometry, &vis.origin)
                     }))
                 }
                 let mut body = urdf_to_rigid_body(&options, &link.inertial);
-                body.set_position(options.shift * body.position(), false);
+                let new_pos = options.shift * body.position();
+                body.set_position(new_pos, false);
                 UrdfLink { body, colliders }
             })
             .collect();
@@ -328,8 +305,8 @@ impl UrdfRobot {
             .joints
             .iter()
             .map(|joint| {
-                let link1 = name_to_link_id[&joint.parent];
-                let link2 = name_to_link_id[&joint.child];
+                let link1 = name_to_link_id[&joint.parent.link];
+                let link2 = name_to_link_id[&joint.child.link];
                 let pose1 = *links[link1].body.position();
                 let rb2 = &mut links[link2].body;
                 let joint = urdf_to_joint(&options, joint, &pose1, rb2);
@@ -454,110 +431,122 @@ impl UrdfRobot {
     }
 
     /// Appends a transform to all the rigid-bodie of this robot.
-    pub fn append_transform(&mut self, transform: &Isometry<Real>) {
+    pub fn append_transform(&mut self, transform: &Pose) {
         for link in &mut self.links {
-            link.body
-                .set_position(transform * link.body.position(), true);
+            let new_pos = transform * link.body.position();
+            link.body.set_position(new_pos, true);
         }
     }
 }
 
+#[rustfmt::skip]
 fn urdf_to_rigid_body(options: &UrdfLoaderOptions, inertial: &Inertial) -> RigidBody {
-    let origin = urdf_to_isometry(&inertial.origin);
+    let origin = urdf_to_pose(&inertial.origin);
     let mut builder = options.rigid_body_blueprint.clone();
     builder.body_type = RigidBodyType::Dynamic;
 
     if options.apply_imported_mass_props {
         builder = builder.additional_mass_properties(MassProperties::with_inertia_matrix(
-            origin.translation.vector.into(),
-            inertial.mass as Real,
+            origin.translation,
+            inertial.mass.value as Real,
+            // See http://wiki.ros.org/urdf/Tutorials/Adding%20Physical%20and%20Collision%20Properties%20to%20a%20URDF%20Model#Inertia
             na::Matrix3::new(
-                inertial.inertia.m11 as Real,
-                inertial.inertia.m12 as Real,
-                inertial.inertia.m13 as Real,
-                inertial.inertia.m21 as Real,
-                inertial.inertia.m22 as Real,
-                inertial.inertia.m23 as Real,
-                inertial.inertia.m31 as Real,
-                inertial.inertia.m32 as Real,
-                inertial.inertia.m33 as Real,
-            ),
+                inertial.inertia.ixx as Real, inertial.inertia.ixy as Real, inertial.inertia.ixz as Real,
+                inertial.inertia.ixy as Real, inertial.inertia.iyy as Real, inertial.inertia.iyz as Real,
+                inertial.inertia.ixz as Real, inertial.inertia.iyz as Real,inertial.inertia.izz as Real,
+            ).into(),
         ))
     }
 
     builder.build()
 }
 
-fn urdf_to_collider(
+fn urdf_to_colliders(
     options: &UrdfLoaderOptions,
-    mesh_dir: &Path,
+    _mesh_dir: &Path, // Unused if none of the meshloader features is enabled.
     geometry: &Geometry,
-    origin: &Pose,
-) -> Option<Collider> {
-    let mut builder = options.collider_blueprint.clone();
-    let mut shape_transform = Isometry::identity();
-    let shape = match &geometry {
-        Geometry::Box { size } => SharedShape::cuboid(
-            size[0] as Real / 2.0,
-            size[1] as Real / 2.0,
-            size[2] as Real / 2.0,
-        ),
+    origin: &UrdfPose,
+) -> Vec<Collider> {
+    let mut shape_transform = Pose::IDENTITY;
+
+    let mut colliders = Vec::new();
+
+    match &geometry {
+        Geometry::Box { size } => {
+            colliders.push(SharedShape::cuboid(
+                size[0] as Real / 2.0,
+                size[1] as Real / 2.0,
+                size[2] as Real / 2.0,
+            ));
+        }
         Geometry::Cylinder { radius, length } => {
             // This rotation will make the cylinder Z-up as per the URDF spec,
             // instead of rapier’s default Y-up.
-            shape_transform = Isometry::rotation(Vector::x() * Real::frac_pi_2());
-            SharedShape::cylinder(*length as Real / 2.0, *radius as Real)
+            shape_transform = Pose::rotation(Vector::X * Real::frac_pi_2());
+            colliders.push(SharedShape::cylinder(
+                *length as Real / 2.0,
+                *radius as Real,
+            ));
         }
-        Geometry::Sphere { radius } => SharedShape::ball(*radius as Real),
+        Geometry::Capsule { radius, length } => {
+            colliders.push(SharedShape::capsule_z(
+                *length as Real / 2.0,
+                *radius as Real,
+            ));
+        }
+        Geometry::Sphere { radius } => {
+            colliders.push(SharedShape::ball(*radius as Real));
+        }
+        #[cfg(not(feature = "__meshloader_is_enabled"))]
+        Geometry::Mesh { .. } => {
+            log::error!(
+                "Mesh loading is disabled by default. Enable one of the format features (`stl`, `collada`, `wavefront`) of `rapier3d-urdf` for mesh support."
+            );
+        }
+        #[cfg(feature = "__meshloader_is_enabled")]
         Geometry::Mesh { filename, scale } => {
-            let path: &Path = filename.as_ref();
+            let full_path = _mesh_dir.join(filename);
             let scale = scale
-                .map(|s| Vector::new(s.x as Real, s.y as Real, s.z as Real))
-                .unwrap_or_else(|| Vector::<Real>::repeat(1.0));
-            match path.extension().and_then(|ext| ext.to_str()) {
-                #[cfg(feature = "stl")]
-                Some("stl") | Some("STL") => {
-                    let full_path = mesh_dir.join(filename);
-                    match rapier3d_stl::load_from_path(
-                        full_path,
-                        MeshConverter::TriMeshWithFlags(options.trimesh_flags),
-                        scale,
-                    ) {
-                        Ok(stl_shape) => {
-                            shape_transform = stl_shape.pose;
-                            stl_shape.shape
-                        }
-                        Err(e) => {
-                            log::error!("failed to load STL file {filename}: {e}");
-                            return None;
-                        }
-                    }
-                }
-                _ => {
-                    log::error!("failed to load file with unknown type {filename}");
-                    return None;
-                }
-            }
-        }
-    };
+                .map(|s| Vector::new(s[0] as Real, s[1] as Real, s[2] as Real))
+                .unwrap_or_else(|| Vector::splat(1.0));
 
-    builder.shape = shape;
-    Some(
-        builder
-            .position(urdf_to_isometry(origin) * shape_transform)
-            .build(),
-    )
+            let Ok(loaded_mesh) = rapier3d_meshloader::load_from_path(
+                full_path,
+                &rapier3d::prelude::MeshConverter::TriMeshWithFlags(options.trimesh_flags),
+                scale,
+            ) else {
+                return Vec::new();
+            };
+            colliders.append(
+                &mut loaded_mesh
+                    .into_iter()
+                    .filter_map(|x| x.map(|s| s.shape).ok())
+                    .collect(),
+            );
+        }
+    }
+
+    colliders
+        .drain(..)
+        .map(move |shape| {
+            let mut builder = options.collider_blueprint.clone();
+            builder.shape = shape;
+            builder
+                .position(urdf_to_pose(origin) * shape_transform)
+                .build()
+        })
+        .collect()
 }
 
-fn urdf_to_isometry(pose: &Pose) -> Isometry<Real> {
-    Isometry::from_parts(
-        Point::new(
+fn urdf_to_pose(pose: &UrdfPose) -> Pose {
+    Pose::from_parts(
+        Vector::new(
             pose.xyz[0] as Real,
             pose.xyz[1] as Real,
             pose.xyz[2] as Real,
-        )
-        .into(),
-        na::UnitQuaternion::from_euler_angles(
+        ),
+        Rotation::from_euler(
+            EulerRot::XYZ,
             pose.rpy[0] as Real,
             pose.rpy[1] as Real,
             pose.rpy[2] as Real,
@@ -568,48 +557,47 @@ fn urdf_to_isometry(pose: &Pose) -> Isometry<Real> {
 fn urdf_to_joint(
     options: &UrdfLoaderOptions,
     joint: &Joint,
-    pose1: &Isometry<Real>,
+    pose1: &Pose,
     link2: &mut RigidBody,
 ) -> GenericJoint {
-    let joint_type = JointType::from_str(&joint.joint_type).unwrap_or_default();
-    let locked_axes = match joint_type {
-        JointType::Fixed => JointAxesMask::LOCKED_FIXED_AXES,
-        JointType::Continuous | JointType::Revolute => JointAxesMask::LOCKED_REVOLUTE_AXES,
-        JointType::Floating => JointAxesMask::empty(),
-        JointType::Planar => JointAxesMask::ANG_AXES | JointAxesMask::LIN_X,
-        JointType::Prismatic => JointAxesMask::LOCKED_PRISMATIC_AXES,
-        JointType::Spherical => JointAxesMask::LOCKED_SPHERICAL_AXES,
+    let locked_axes = match joint.joint_type {
+        urdf_rs::JointType::Fixed => JointAxesMask::LOCKED_FIXED_AXES,
+        urdf_rs::JointType::Continuous | urdf_rs::JointType::Revolute => {
+            JointAxesMask::LOCKED_REVOLUTE_AXES
+        }
+        urdf_rs::JointType::Floating => JointAxesMask::empty(),
+        urdf_rs::JointType::Planar => JointAxesMask::ANG_AXES | JointAxesMask::LIN_X,
+        urdf_rs::JointType::Prismatic => JointAxesMask::LOCKED_PRISMATIC_AXES,
+        urdf_rs::JointType::Spherical => JointAxesMask::LOCKED_SPHERICAL_AXES,
     };
-    let joint_to_parent = urdf_to_isometry(&joint.origin);
-    let joint_axis = na::Unit::try_new(
-        Vector::new(
-            joint.axis.x as Real,
-            joint.axis.y as Real,
-            joint.axis.z as Real,
-        ),
-        1.0e-5,
-    );
+    let joint_to_parent = urdf_to_pose(&joint.origin);
+    let joint_axis = Vector::new(
+        joint.axis.xyz[0] as Real,
+        joint.axis.xyz[1] as Real,
+        joint.axis.xyz[2] as Real,
+    )
+    .normalize_or_zero();
 
     link2.set_position(pose1 * joint_to_parent, false);
 
     let mut builder = GenericJointBuilder::new(locked_axes)
-        .local_anchor1(joint_to_parent.translation.vector.into())
+        .local_anchor1(joint_to_parent.translation)
         .contacts_enabled(options.enable_joint_collisions);
 
-    if let Some(joint_axis) = joint_axis {
+    if joint_axis != Vector::ZERO {
         builder = builder
-            .local_axis1(joint_to_parent * joint_axis)
+            .local_axis1(joint_to_parent.rotation * joint_axis)
             .local_axis2(joint_axis);
     }
 
-    match joint_type {
-        JointType::Prismatic => {
+    match joint.joint_type {
+        urdf_rs::JointType::Prismatic => {
             builder = builder.limits(
                 JointAxis::LinX,
                 [joint.limit.lower as Real, joint.limit.upper as Real],
             )
         }
-        JointType::Revolute => {
+        urdf_rs::JointType::Revolute => {
             builder = builder.limits(
                 JointAxis::AngX,
                 [joint.limit.lower as Real, joint.limit.upper as Real],

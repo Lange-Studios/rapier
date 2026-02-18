@@ -10,13 +10,12 @@ use crate::dynamics::{
     MultibodyJointSet, RigidBodyHandle, RigidBodySet,
 };
 use crate::geometry::ContactManifold;
-use crate::math::{Real, SPATIAL_DIM};
+use crate::math::{DVector, Real, SPATIAL_DIM};
 #[cfg(feature = "simd-is-enabled")]
 use crate::{
     dynamics::solver::{OneBodyConstraintSimd, TwoBodyConstraintSimd},
     math::SIMD_WIDTH,
 };
-use na::DVector;
 use std::sync::atomic::Ordering;
 
 // pub fn init_constraint_groups(
@@ -47,7 +46,7 @@ pub(crate) enum ConstraintDesc {
 }
 
 pub(crate) struct ParallelSolverConstraints<TwoBodyConstraint> {
-    pub generic_jacobians: DVector<Real>,
+    pub generic_jacobians: DVector,
     pub two_body_interactions: Vec<usize>,
     pub one_body_interactions: Vec<usize>,
     pub generic_two_body_interactions: Vec<usize>,
@@ -164,7 +163,7 @@ macro_rules! impl_init_constraints_group {
                         self.constraint_descs.push((
                             total_num_constraints,
                             ConstraintDesc::TwoBodyGrouped(
-                                gather![|ii| interaction_i[ii]],
+                                array![|ii| interaction_i[ii]],
                             ),
                         ));
                         total_num_constraints += $num_active_constraints_and_jacobian_lines(interaction).0;
@@ -190,7 +189,7 @@ macro_rules! impl_init_constraints_group {
                         self.constraint_descs.push((
                             total_num_constraints,
                             ConstraintDesc::OneBodyGrouped(
-                                gather![|ii| interaction_i[ii]],
+                                array![|ii| interaction_i[ii]],
                             ),
                         ));
                         total_num_constraints += $num_active_constraints_and_jacobian_lines(interaction).0;
@@ -337,12 +336,12 @@ impl ParallelSolverConstraints<ContactConstraintTypes> {
                     }
                     #[cfg(feature = "simd-is-enabled")]
                     ConstraintDesc::TwoBodyGrouped(manifold_id) => {
-                        let manifolds = gather![|ii| &*manifolds_all[manifold_id[ii]]];
+                        let manifolds = array![|ii| &*manifolds_all[manifold_id[ii]]];
                         TwoBodyConstraintSimd::generate(params, *manifold_id, manifolds, bodies, &mut self.velocity_constraints, Some(desc.0));
                     }
                     #[cfg(feature = "simd-is-enabled")]
                     ConstraintDesc::OneBodyGrouped(manifold_id) => {
-                        let manifolds = gather![|ii| &*manifolds_all[manifold_id[ii]]];
+                        let manifolds = array![|ii| &*manifolds_all[manifold_id[ii]]];
                         OneBodyConstraintSimd::generate(params, *manifold_id, manifolds, bodies, &mut self.velocity_constraints, Some(desc.0));
                     }
                     ConstraintDesc::GenericTwoBodyNongrouped(manifold_id, j_id) => {
@@ -387,12 +386,12 @@ impl ParallelSolverConstraints<JointConstraintTypes> {
                     }
                     #[cfg(feature = "simd-is-enabled")]
                     ConstraintDesc::TwoBodyGrouped(joint_id) => {
-                        let impulse_joints = gather![|ii| &joints_all[joint_id[ii]].weight];
+                        let impulse_joints = array![|ii| &joints_all[joint_id[ii]].weight];
                         JointConstraintTypes::from_wide_joint(params, *joint_id, impulse_joints, bodies, &mut self.velocity_constraints, Some(desc.0));
                     }
                     #[cfg(feature = "simd-is-enabled")]
                     ConstraintDesc::OneBodyGrouped(joint_id) => {
-                        let impulse_joints = gather![|ii| &joints_all[joint_id[ii]].weight];
+                        let impulse_joints = array![|ii| &joints_all[joint_id[ii]].weight];
                         JointConstraintTypes::from_wide_joint_one_body(params, *joint_id, impulse_joints, bodies, &mut self.velocity_constraints, Some(desc.0));
                     }
                     ConstraintDesc::GenericTwoBodyNongrouped(joint_id, j_id) => {

@@ -1,8 +1,10 @@
+use parry::utils::hashset::HashSet;
+
 use super::ImpulseJoint;
 use crate::geometry::{InteractionGraph, RigidBodyGraphIndex, TemporaryInteractionIndex};
 
-use crate::data::arena::Arena;
 use crate::data::Coarena;
+use crate::data::arena::Arena;
 use crate::dynamics::{GenericJoint, IslandManager, RigidBodyHandle, RigidBodySet};
 
 /// The unique identifier of a joint added to the joint set.
@@ -36,13 +38,43 @@ pub(crate) type JointIndex = usize;
 pub(crate) type JointGraphEdge = crate::data::graph::Edge<ImpulseJoint>;
 
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
-#[derive(Clone, Default)]
-/// A set of impulse_joints that can be handled by a physics `World`.
+#[derive(Clone, Default, Debug)]
+/// The collection that stores all joints connecting rigid bodies in your physics world.
+///
+/// Joints constrain how two bodies can move relative to each other. This set manages
+/// all joint instances (hinges, sliders, springs, etc.) using handles for safe access.
+///
+/// # Common joint types
+/// - [`FixedJoint`](crate::dynamics::FixedJoint): Weld two bodies together
+/// - [`RevoluteJoint`](crate::dynamics::RevoluteJoint): Hinge (rotation around axis)
+/// - [`PrismaticJoint`](crate::dynamics::PrismaticJoint): Slider (translation along axis)
+/// - [`SpringJoint`](crate::dynamics::SpringJoint): Elastic connection
+/// - [`RopeJoint`](crate::dynamics::RopeJoint): Maximum distance limit
+///
+/// # Example
+/// ```
+/// # use rapier3d::prelude::*;
+/// # let mut bodies = RigidBodySet::new();
+/// # let body1 = bodies.insert(RigidBodyBuilder::dynamic());
+/// # let body2 = bodies.insert(RigidBodyBuilder::dynamic());
+/// let mut joints = ImpulseJointSet::new();
+///
+/// // Create a hinge connecting two bodies
+/// let joint = RevoluteJointBuilder::new(Vector::Y)
+///     .local_anchor1(Vector::new(1.0, 0.0, 0.0))
+///     .local_anchor2(Vector::new(-1.0, 0.0, 0.0))
+///     .build();
+/// let handle = joints.insert(body1, body2, joint, true);
+/// ```
 pub struct ImpulseJointSet {
     rb_graph_ids: Coarena<RigidBodyGraphIndex>,
-    joint_ids: Arena<TemporaryInteractionIndex>, // Map joint handles to edge ids on the graph.
+    /// Map joint handles to edge ids on the graph.
+    joint_ids: Arena<TemporaryInteractionIndex>,
     joint_graph: InteractionGraph<RigidBodyHandle, ImpulseJoint>,
-    pub(crate) to_wake_up: Vec<RigidBodyHandle>, // A set of rigid-body handles to wake-up during the next timestep.
+    /// A set of rigid-body handles to wake-up during the next timestep.
+    pub(crate) to_wake_up: HashSet<RigidBodyHandle>,
+    /// A set of rigid-body pairs to join in the island manager during the next timestep.
+    pub(crate) to_join: HashSet<(RigidBodyHandle, RigidBodyHandle)>,
 }
 
 impl ImpulseJointSet {
@@ -52,26 +84,45 @@ impl ImpulseJointSet {
             rb_graph_ids: Coarena::new(),
             joint_ids: Arena::new(),
             joint_graph: InteractionGraph::new(),
-            to_wake_up: vec![],
+            to_wake_up: HashSet::default(),
+            to_join: HashSet::default(),
         }
     }
 
-    /// The number of impulse_joints on this set.
+    /// Returns how many joints are currently in this collection.
     pub fn len(&self) -> usize {
         self.joint_graph.graph.edges.len()
     }
 
-    /// `true` if there are no impulse_joints in this set.
+    /// Returns `true` if there are no joints in this collection.
     pub fn is_empty(&self) -> bool {
         self.joint_graph.graph.edges.is_empty()
     }
 
-    /// Retrieve the joint graph where edges are impulse_joints and nodes are rigid body handles.
+    /// Returns the internal graph structure (nodes=bodies, edges=joints).
+    ///
+    /// Advanced usage - most users should use `attached_joints()` instead.
     pub fn joint_graph(&self) -> &InteractionGraph<RigidBodyHandle, ImpulseJoint> {
         &self.joint_graph
     }
 
-    /// Iterates through all the joints between two rigid-bodies.
+    /// Returns all joints connecting two specific bodies.
+    ///
+    /// Usually returns 0 or 1 joint, but multiple joints can connect the same pair.
+    ///
+    /// # Example
+    /// ```
+    /// # use rapier3d::prelude::*;
+    /// # let mut bodies = RigidBodySet::new();
+    /// # let mut joints = ImpulseJointSet::new();
+    /// # let body1 = bodies.insert(RigidBodyBuilder::dynamic());
+    /// # let body2 = bodies.insert(RigidBodyBuilder::dynamic());
+    /// # let joint = RevoluteJointBuilder::new(Vector::Y);
+    /// # joints.insert(body1, body2, joint, true);
+    /// for (handle, joint) in joints.joints_between(body1, body2) {
+    ///     println!("Found joint {:?}", handle);
+    /// }
+    /// ```
     pub fn joints_between(
         &self,
         body1: RigidBodyHandle,
@@ -85,7 +136,24 @@ impl ImpulseJointSet {
             .map(|inter| (inter.2.handle, inter.2))
     }
 
-    /// Iterates through all the impulse joints attached to the given rigid-body.
+    /// Returns all joints attached to a specific body.
+    ///
+    /// Each result is `(body1, body2, joint_handle, joint)` where one of the bodies
+    /// matches the queried body.
+    ///
+    /// # Example
+    /// ```
+    /// # use rapier3d::prelude::*;
+    /// # let mut bodies = RigidBodySet::new();
+    /// # let mut joints = ImpulseJointSet::new();
+    /// # let body_handle = bodies.insert(RigidBodyBuilder::dynamic());
+    /// # let other_body = bodies.insert(RigidBodyBuilder::dynamic());
+    /// # let joint = RevoluteJointBuilder::new(Vector::Y);
+    /// # joints.insert(body_handle, other_body, joint, true);
+    /// for (b1, b2, j_handle, joint) in joints.attached_joints(body_handle) {
+    ///     println!("Body connected to {:?} via {:?}", b2, j_handle);
+    /// }
+    /// ```
     pub fn attached_joints(
         &self,
         body: RigidBodyHandle,
@@ -117,7 +185,9 @@ impl ImpulseJointSet {
         })
     }
 
-    /// Iterates through all the enabled impulse joints attached to the given rigid-body.
+    /// Returns only the enabled joints attached to a body.
+    ///
+    /// Same as `attached_joints()` but filters out disabled joints.
     pub fn attached_enabled_joints(
         &self,
         body: RigidBodyHandle,
@@ -133,32 +203,41 @@ impl ImpulseJointSet {
             .filter(|inter| inter.3.data.is_enabled())
     }
 
-    /// Is the given joint handle valid?
+    /// Checks if the given joint handle is valid (joint still exists).
     pub fn contains(&self, handle: ImpulseJointHandle) -> bool {
         self.joint_ids.contains(handle.0)
     }
 
-    /// Gets the joint with the given handle.
+    /// Returns a read-only reference to the joint with the given handle.
     pub fn get(&self, handle: ImpulseJointHandle) -> Option<&ImpulseJoint> {
         let id = self.joint_ids.get(handle.0)?;
         self.joint_graph.graph.edge_weight(*id)
     }
 
-    /// Gets a mutable reference to the joint with the given handle.
-    pub fn get_mut(&mut self, handle: ImpulseJointHandle) -> Option<&mut ImpulseJoint> {
+    /// Returns a mutable reference to the joint with the given handle.
+    ///
+    /// # Parameters
+    /// * `wake_up_connected_bodies` - If `true`, wakes up both bodies connected by this joint
+    pub fn get_mut(
+        &mut self,
+        handle: ImpulseJointHandle,
+        wake_up_connected_bodies: bool,
+    ) -> Option<&mut ImpulseJoint> {
         let id = self.joint_ids.get(handle.0)?;
-        self.joint_graph.graph.edge_weight_mut(*id)
+        let joint = self.joint_graph.graph.edge_weight_mut(*id);
+        if wake_up_connected_bodies {
+            if let Some(joint) = &joint {
+                self.to_wake_up.insert(joint.body1);
+                self.to_wake_up.insert(joint.body2);
+            }
+        }
+        joint
     }
 
-    /// Gets the joint with the given handle without a known generation.
+    /// Gets a joint by index without knowing the generation (advanced/unsafe).
     ///
-    /// This is useful when you know you want the joint at index `i` but
-    /// don't know what is its current generation number. Generation numbers are
-    /// used to protect from the ABA problem because the joint position `i`
-    /// are recycled between two insertion and a removal.
-    ///
-    /// Using this is discouraged in favor of `self.get(handle)` which does not
-    /// suffer form the ABA problem.
+    /// ⚠️ **Prefer `get()` instead!** This bypasses generation checks.
+    /// See [`RigidBodySet::get_unknown_gen`] for details on the ABA problem.
     pub fn get_unknown_gen(&self, i: u32) -> Option<(&ImpulseJoint, ImpulseJointHandle)> {
         let (id, handle) = self.joint_ids.get_unknown_gen(i)?;
         Some((
@@ -167,15 +246,9 @@ impl ImpulseJointSet {
         ))
     }
 
-    /// Gets a mutable reference to the joint with the given handle without a known generation.
+    /// Gets a mutable joint by index without knowing the generation (advanced/unsafe).
     ///
-    /// This is useful when you know you want the joint at position `i` but
-    /// don't know what is its current generation number. Generation numbers are
-    /// used to protect from the ABA problem because the joint position `i`
-    /// are recycled between two insertion and a removal.
-    ///
-    /// Using this is discouraged in favor of `self.get_mut(handle)` which does not
-    /// suffer form the ABA problem.
+    /// ⚠️ **Prefer `get_mut()` instead!** This bypasses generation checks.
     pub fn get_unknown_gen_mut(
         &mut self,
         i: u32,
@@ -187,7 +260,9 @@ impl ImpulseJointSet {
         ))
     }
 
-    /// Iterates through all the joint on this set.
+    /// Iterates over all joints in this collection.
+    ///
+    /// Each iteration yields `(joint_handle, &joint)`.
     pub fn iter(&self) -> impl Iterator<Item = (ImpulseJointHandle, &ImpulseJoint)> {
         self.joint_graph
             .graph
@@ -196,7 +271,9 @@ impl ImpulseJointSet {
             .map(|e| (e.weight.handle, &e.weight))
     }
 
-    /// Iterates mutably through all the joint on this set.
+    /// Iterates over all joints with mutable access.
+    ///
+    /// Each iteration yields `(joint_handle, &mut joint)`.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (ImpulseJointHandle, &mut ImpulseJoint)> {
         self.joint_graph
             .graph
@@ -225,10 +302,29 @@ impl ImpulseJointSet {
         &mut self.joint_graph.graph.edges
     }
 
-    /// Inserts a new joint into this set and retrieve its handle.
+    /// Adds a joint connecting two bodies and returns its handle.
     ///
-    /// If `wake_up` is set to `true`, then the bodies attached to this joint will be
-    /// automatically woken up during the next timestep.
+    /// The joint constrains how the two bodies can move relative to each other.
+    ///
+    /// # Parameters
+    /// * `body1`, `body2` - The two bodies to connect
+    /// * `data` - The joint configuration (FixedJoint, RevoluteJoint, etc.)
+    /// * `wake_up` - If `true`, wakes up both bodies
+    ///
+    /// # Example
+    /// ```
+    /// # use rapier3d::prelude::*;
+    /// # let mut bodies = RigidBodySet::new();
+    /// # let mut joints = ImpulseJointSet::new();
+    /// # let body1 = bodies.insert(RigidBodyBuilder::dynamic());
+    /// # let body2 = bodies.insert(RigidBodyBuilder::dynamic());
+    /// let joint = RevoluteJointBuilder::new(Vector::Y)
+    ///     .local_anchor1(Vector::new(1.0, 0.0, 0.0))
+    ///     .local_anchor2(Vector::new(-1.0, 0.0, 0.0))
+    ///     .build();
+    /// let handle = joints.insert(body1, body2, joint, true);
+    /// ```
+    #[profiling::function]
     pub fn insert(
         &mut self,
         body1: RigidBodyHandle,
@@ -242,7 +338,7 @@ impl ImpulseJointSet {
             body1,
             body2,
             data,
-            impulses: na::zero(),
+            impulses: Default::default(),
             handle: ImpulseJointHandle(handle),
         };
 
@@ -269,9 +365,11 @@ impl ImpulseJointSet {
         self.joint_ids[handle] = self.joint_graph.add_edge(graph_index1, graph_index2, joint);
 
         if wake_up {
-            self.to_wake_up.push(body1);
-            self.to_wake_up.push(body2);
+            self.to_wake_up.insert(body1);
+            self.to_wake_up.insert(body2);
         }
+
+        self.to_join.insert((body1, body2));
 
         ImpulseJointHandle(handle)
     }
@@ -284,7 +382,7 @@ impl ImpulseJointSet {
         bodies: &RigidBodySet,
         out: &mut [Vec<JointIndex>],
     ) {
-        for out_island in &mut out[..islands.num_islands()] {
+        for out_island in &mut out[..islands.active_islands().len()] {
             out_island.clear();
         }
 
@@ -295,35 +393,56 @@ impl ImpulseJointSet {
             let rb2 = &bodies[joint.body2];
 
             if joint.data.is_enabled()
-                && (rb1.is_dynamic() || rb2.is_dynamic())
-                && (!rb1.is_dynamic() || !rb1.is_sleeping())
-                && (!rb2.is_dynamic() || !rb2.is_sleeping())
+                && (rb1.is_dynamic_or_kinematic() || rb2.is_dynamic_or_kinematic())
+                && (!rb1.is_dynamic_or_kinematic() || !rb1.is_sleeping())
+                && (!rb2.is_dynamic_or_kinematic() || !rb2.is_sleeping())
             {
-                let island_index = if !rb1.is_dynamic() {
-                    rb2.ids.active_island_id
+                let island_awake_index = if !rb1.is_dynamic_or_kinematic() {
+                    islands.islands[rb2.ids.active_island_id]
+                        .id_in_awake_list()
+                        .expect("Internal error: island should be awake.")
                 } else {
-                    rb1.ids.active_island_id
+                    islands.islands[rb1.ids.active_island_id]
+                        .id_in_awake_list()
+                        .expect("Internal error: island should be awake.")
                 };
 
-                out[island_index].push(i);
+                out[island_awake_index].push(i);
             }
         }
     }
 
-    /// Removes a joint from this set.
+    /// Removes a joint from the world.
     ///
-    /// If `wake_up` is set to `true`, then the bodies attached to this joint will be
-    /// automatically woken up.
+    /// Returns the removed joint if it existed, or `None` if the handle was invalid.
+    ///
+    /// # Parameters
+    /// * `wake_up` - If `true`, wakes up both bodies that were connected by this joint
+    ///
+    /// # Example
+    /// ```
+    /// # use rapier3d::prelude::*;
+    /// # let mut bodies = RigidBodySet::new();
+    /// # let mut joints = ImpulseJointSet::new();
+    /// # let body1 = bodies.insert(RigidBodyBuilder::dynamic());
+    /// # let body2 = bodies.insert(RigidBodyBuilder::dynamic());
+    /// # let joint = RevoluteJointBuilder::new(Vector::Y).build();
+    /// # let joint_handle = joints.insert(body1, body2, joint, true);
+    /// if let Some(joint) = joints.remove(joint_handle, true) {
+    ///     println!("Removed joint between {:?} and {:?}", joint.body1, joint.body2);
+    /// }
+    /// ```
+    #[profiling::function]
     pub fn remove(&mut self, handle: ImpulseJointHandle, wake_up: bool) -> Option<ImpulseJoint> {
         let id = self.joint_ids.remove(handle.0)?;
         let endpoints = self.joint_graph.graph.edge_endpoints(id)?;
 
         if wake_up {
             if let Some(rb_handle) = self.joint_graph.graph.node_weight(endpoints.0) {
-                self.to_wake_up.push(*rb_handle);
+                self.to_wake_up.insert(*rb_handle);
             }
             if let Some(rb_handle) = self.joint_graph.graph.node_weight(endpoints.1) {
-                self.to_wake_up.push(*rb_handle);
+                self.to_wake_up.insert(*rb_handle);
             }
         }
 
@@ -341,6 +460,7 @@ impl ImpulseJointSet {
     /// The provided rigid-body handle is not required to identify a rigid-body that
     /// is still contained by the `bodies` component set.
     /// Returns the (now invalid) handles of the removed impulse_joints.
+    #[profiling::function]
     pub fn remove_joints_attached_to_rigid_body(
         &mut self,
         handle: RigidBodyHandle,
@@ -372,8 +492,8 @@ impl ImpulseJointSet {
                     }
 
                     // Wake up the attached bodies.
-                    self.to_wake_up.push(h1);
-                    self.to_wake_up.push(h2);
+                    self.to_wake_up.insert(h1);
+                    self.to_wake_up.insert(h2);
                 }
 
                 if let Some(other) = self.joint_graph.remove_node(deleted_id) {

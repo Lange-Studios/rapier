@@ -1,14 +1,14 @@
-use crossbeam::channel::Receiver;
 use rapier::dynamics::{
     CCDSolver, ImpulseJointSet, IntegrationParameters, IslandManager, MultibodyJointSet,
     RigidBodySet,
 };
 use rapier::geometry::{
-    ColliderSet, CollisionEvent, ContactForceEvent, DefaultBroadPhase, NarrowPhase,
+    BroadPhaseBvh, ColliderSet, CollisionEvent, ContactForceEvent, DefaultBroadPhase, NarrowPhase,
 };
-use rapier::math::{Real, Vector};
-use rapier::pipeline::{PhysicsHooks, PhysicsPipeline, QueryPipeline};
+use rapier::pipeline::{PhysicsHooks, PhysicsPipeline};
+use std::sync::mpsc::Receiver;
 
+#[derive(Clone)]
 pub struct PhysicsSnapshot {
     timestep_id: usize,
     broad_phase: Vec<u8>,
@@ -54,6 +54,7 @@ impl PhysicsSnapshot {
         })
     }
 
+    #[profiling::function]
     pub fn restore(&self) -> bincode::Result<DeserializedPhysicsSnapshot> {
         Ok(DeserializedPhysicsSnapshot {
             timestep_id: self.timestep_id,
@@ -75,7 +76,7 @@ impl PhysicsSnapshot {
             + self.colliders.len()
             + self.impulse_joints.len()
             + self.multibody_joints.len();
-        println!("Snapshot length: {}B", total);
+        println!("Snapshot length: {total}B");
         println!("|_ broad_phase: {}B", self.broad_phase.len());
         println!("|_ narrow_phase: {}B", self.narrow_phase.len());
         println!("|_ island_manager: {}B", self.island_manager.len());
@@ -88,7 +89,7 @@ impl PhysicsSnapshot {
 
 pub struct PhysicsState {
     pub islands: IslandManager,
-    pub broad_phase: DefaultBroadPhase,
+    pub broad_phase: BroadPhaseBvh,
     pub narrow_phase: NarrowPhase,
     pub bodies: RigidBodySet,
     pub colliders: ColliderSet,
@@ -96,9 +97,8 @@ pub struct PhysicsState {
     pub multibody_joints: MultibodyJointSet,
     pub ccd_solver: CCDSolver,
     pub pipeline: PhysicsPipeline,
-    pub query_pipeline: QueryPipeline,
     pub integration_parameters: IntegrationParameters,
-    pub gravity: Vector<Real>,
+    pub gravity: rapier::math::Vector,
     pub hooks: Box<dyn PhysicsHooks>,
 }
 
@@ -112,7 +112,7 @@ impl PhysicsState {
     pub fn new() -> Self {
         Self {
             islands: IslandManager::new(),
-            broad_phase: DefaultBroadPhase::new(),
+            broad_phase: DefaultBroadPhase::default(),
             narrow_phase: NarrowPhase::new(),
             bodies: RigidBodySet::new(),
             colliders: ColliderSet::new(),
@@ -120,11 +120,39 @@ impl PhysicsState {
             multibody_joints: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
             pipeline: PhysicsPipeline::new(),
-            query_pipeline: QueryPipeline::new(),
             integration_parameters: IntegrationParameters::default(),
-            gravity: Vector::y() * -9.81,
+            gravity: rapier::math::Vector::Y * -9.81,
             hooks: Box::new(()),
         }
+    }
+
+    /// Create a snapshot of the current physics state.
+    pub fn snapshot(&self) -> PhysicsSnapshot {
+        PhysicsSnapshot::new(
+            0, // timestep_id - could be tracked if needed
+            &self.broad_phase,
+            &self.narrow_phase,
+            &self.islands,
+            &self.bodies,
+            &self.colliders,
+            &self.impulse_joints,
+            &self.multibody_joints,
+        )
+        .expect("Failed to create physics snapshot")
+    }
+
+    /// Restore physics state from a snapshot.
+    pub fn restore_snapshot(&mut self, snapshot: PhysicsSnapshot) {
+        let restored = snapshot
+            .restore()
+            .expect("Failed to restore physics snapshot");
+        self.broad_phase = restored.broad_phase;
+        self.narrow_phase = restored.narrow_phase;
+        self.islands = restored.island_manager;
+        self.bodies = restored.bodies;
+        self.colliders = restored.colliders;
+        self.impulse_joints = restored.impulse_joints;
+        self.multibody_joints = restored.multibody_joints;
     }
 }
 

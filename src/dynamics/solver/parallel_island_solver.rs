@@ -10,7 +10,7 @@ use crate::dynamics::{
     RigidBodySet,
 };
 use crate::geometry::{ContactManifold, ContactManifoldIndex};
-use na::DVector;
+use crate::math::DVector;
 
 use super::{ParallelInteractionGroups, ParallelVelocitySolver, SolverVel};
 
@@ -160,6 +160,7 @@ impl ParallelIslandSolver {
         }
     }
 
+    #[profiling::function]
     pub fn init_and_solve<'s>(
         &'s mut self,
         scope: &Scope<'s>,
@@ -234,7 +235,7 @@ impl ParallelIslandSolver {
         {
             let mut solver_id = 0;
             let island_range = islands.active_island_range(island_id);
-            let active_bodies = &islands.active_dynamic_set[island_range];
+            let active_bodies = &islands.active_set[island_range];
             for handle in active_bodies {
                 if let Some(link) = multibodies.rigid_body_link(*handle).copied() {
                     let multibody = multibodies
@@ -298,7 +299,7 @@ impl ParallelIslandSolver {
                 // Initialize `solver_vels` (per-body velocity deltas) with external accelerations (gravity etc):
                 {
                     let island_range = islands.active_island_range(island_id);
-                    let active_bodies = &islands.active_dynamic_set[island_range];
+                    let active_bodies = &islands.active_set[island_range];
 
                     concurrent_loop! {
                         let batch_size = thread.batch_size;
@@ -320,8 +321,8 @@ impl ParallelIslandSolver {
 
                                 // NOTE: `dvel.angular` is actually storing angular velocity delta multiplied
                                 //       by the square root of the inertia tensor:
-                                dvel.angular += rb.mprops.effective_world_inv_inertia_sqrt * rb.forces.torque * params.dt;
-                                dvel.linear += rb.forces.force.component_mul(&rb.mprops.effective_inv_mass) * params.dt;
+                                dvel.angular += rb.mprops.effective_world_inv_inertia * rb.forces.torque * params.dt;
+                                dvel.linear += rb.forces.force * rb.mprops.effective_inv_mass * params.dt;
                             }
                         }
                     }

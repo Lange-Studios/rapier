@@ -1,19 +1,38 @@
 #![allow(clippy::unnecessary_cast)] // Casts are needed for switching between f32/f64.
 
 use crate::{
-    physics::{PhysicsEvents, PhysicsState},
     TestbedGraphics,
+    physics::{PhysicsEvents, PhysicsState},
 };
 use plugin::HarnessPlugin;
 use rapier::dynamics::{
     CCDSolver, ImpulseJointSet, IntegrationParameters, IslandManager, MultibodyJointSet,
     RigidBodySet,
 };
-use rapier::geometry::{ColliderSet, DefaultBroadPhase, NarrowPhase};
-use rapier::math::{Real, Vector};
-use rapier::pipeline::{ChannelEventCollector, PhysicsHooks, PhysicsPipeline, QueryPipeline};
+use rapier::geometry::{BroadPhaseBvh, BvhOptimizationStrategy, ColliderSet, NarrowPhase};
+use rapier::pipeline::{ChannelEventCollector, PhysicsHooks, PhysicsPipeline};
 
 pub mod plugin;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum RapierBroadPhaseType {
+    #[default]
+    BvhSubtreeOptimizer,
+    BvhWithoutOptimization,
+}
+
+impl RapierBroadPhaseType {
+    pub fn init_broad_phase(self) -> BroadPhaseBvh {
+        match self {
+            RapierBroadPhaseType::BvhSubtreeOptimizer => {
+                BroadPhaseBvh::with_optimization_strategy(BvhOptimizationStrategy::SubtreeOptimizer)
+            }
+            RapierBroadPhaseType::BvhWithoutOptimization => {
+                BroadPhaseBvh::with_optimization_strategy(BvhOptimizationStrategy::None)
+            }
+        }
+    }
+}
 
 pub struct RunState {
     #[cfg(feature = "parallel")]
@@ -94,8 +113,8 @@ type Callbacks =
 #[allow(dead_code)]
 impl Harness {
     pub fn new_empty() -> Self {
-        let collision_event_channel = crossbeam::channel::unbounded();
-        let contact_force_event_channel = crossbeam::channel::unbounded();
+        let collision_event_channel = std::sync::mpsc::channel();
+        let contact_force_event_channel = std::sync::mpsc::channel();
         let event_handler =
             ChannelEventCollector::new(collision_event_channel.0, contact_force_event_channel.0);
         let events = PhysicsEvents {
@@ -121,9 +140,16 @@ impl Harness {
         colliders: ColliderSet,
         impulse_joints: ImpulseJointSet,
         multibody_joints: MultibodyJointSet,
+        broad_phase_type: RapierBroadPhaseType,
     ) -> Self {
         let mut res = Self::new_empty();
-        res.set_world(bodies, colliders, impulse_joints, multibody_joints);
+        res.set_world(
+            bodies,
+            colliders,
+            impulse_joints,
+            multibody_joints,
+            broad_phase_type,
+        );
         res
     }
 
@@ -149,13 +175,15 @@ impl Harness {
         colliders: ColliderSet,
         impulse_joints: ImpulseJointSet,
         multibody_joints: MultibodyJointSet,
+        broad_phase_type: RapierBroadPhaseType,
     ) {
         self.set_world_with_params(
             bodies,
             colliders,
             impulse_joints,
             multibody_joints,
-            Vector::y() * -9.81,
+            broad_phase_type,
+            rapier::math::Vector::Y * -9.81,
             (),
         )
     }
@@ -166,11 +194,10 @@ impl Harness {
         colliders: ColliderSet,
         impulse_joints: ImpulseJointSet,
         multibody_joints: MultibodyJointSet,
-        gravity: Vector<Real>,
+        broad_phase_type: RapierBroadPhaseType,
+        gravity: rapier::math::Vector,
         hooks: impl PhysicsHooks + 'static,
     ) {
-        // println!("Num bodies: {}", bodies.len());
-        // println!("Num impulse_joints: {}", impulse_joints.len());
         self.physics.gravity = gravity;
         self.physics.bodies = bodies;
         self.physics.colliders = colliders;
@@ -179,12 +206,11 @@ impl Harness {
         self.physics.hooks = Box::new(hooks);
 
         self.physics.islands = IslandManager::new();
-        self.physics.broad_phase = DefaultBroadPhase::new();
+        self.physics.broad_phase = broad_phase_type.init_broad_phase();
         self.physics.narrow_phase = NarrowPhase::new();
         self.state.timestep_id = 0;
         self.state.time = 0.0;
         self.physics.ccd_solver = CCDSolver::new();
-        self.physics.query_pipeline = QueryPipeline::new();
         self.physics.pipeline = PhysicsPipeline::new();
         self.physics.pipeline.counters.enable();
     }
@@ -206,6 +232,7 @@ impl Harness {
         self.step_with_graphics(None);
     }
 
+    #[profiling::function]
     pub fn step_with_graphics(&mut self, mut graphics: Option<&mut TestbedGraphics>) {
         #[cfg(feature = "parallel")]
         {
@@ -213,7 +240,7 @@ impl Harness {
             let event_handler = &self.event_handler;
             self.state.thread_pool.install(|| {
                 physics.pipeline.step(
-                    &physics.gravity,
+                    physics.gravity,
                     &physics.integration_parameters,
                     &mut physics.islands,
                     &mut physics.broad_phase,
@@ -223,7 +250,6 @@ impl Harness {
                     &mut physics.impulse_joints,
                     &mut physics.multibody_joints,
                     &mut physics.ccd_solver,
-                    Some(&mut physics.query_pipeline),
                     &*physics.hooks,
                     event_handler,
                 );
@@ -232,7 +258,7 @@ impl Harness {
 
         #[cfg(not(feature = "parallel"))]
         self.physics.pipeline.step(
-            &self.physics.gravity,
+            self.physics.gravity,
             &self.physics.integration_parameters,
             &mut self.physics.islands,
             &mut self.physics.broad_phase,
@@ -242,7 +268,6 @@ impl Harness {
             &mut self.physics.impulse_joints,
             &mut self.physics.multibody_joints,
             &mut self.physics.ccd_solver,
-            Some(&mut self.physics.query_pipeline),
             &*self.physics.hooks,
             &self.event_handler,
         );

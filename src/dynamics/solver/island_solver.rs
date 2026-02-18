@@ -1,7 +1,7 @@
 use super::{JointConstraintsSet, VelocitySolver};
 use crate::counters::Counters;
-use crate::dynamics::solver::contact_constraint::ContactConstraintsSet;
 use crate::dynamics::IslandManager;
+use crate::dynamics::solver::contact_constraint::ContactConstraintsSet;
 use crate::dynamics::{IntegrationParameters, JointGraphEdge, JointIndex, RigidBodySet};
 use crate::geometry::{ContactManifold, ContactManifoldIndex};
 use crate::prelude::MultibodyJointSet;
@@ -28,6 +28,7 @@ impl IslandSolver {
         }
     }
 
+    #[profiling::function]
     pub fn init_and_solve(
         &mut self,
         island_id: usize,
@@ -42,26 +43,36 @@ impl IslandSolver {
         multibodies: &mut MultibodyJointSet,
     ) {
         counters.solver.velocity_assembly_time.resume();
-        let num_solver_iterations = base_params.num_solver_iterations.get()
-            + islands.active_island_additional_solver_iterations(island_id);
+        counters
+            .solver
+            .velocity_assembly_time_solver_bodies
+            .resume();
+        let num_solver_iterations = base_params.num_solver_iterations
+            + islands.island(island_id).additional_solver_iterations();
 
         let mut params = *base_params;
         params.dt /= num_solver_iterations as Real;
 
         /*
          *
-         * Bellow this point, the `params` is using the "small step" settings.
+         * Below this point, the `params` is using the "small step" settings.
          *
          */
         // INIT
         self.velocity_solver
             .init_solver_velocities_and_solver_bodies(
+                base_params.dt,
                 &params,
                 island_id,
                 islands,
                 bodies,
                 multibodies,
             );
+        counters.solver.velocity_assembly_time_solver_bodies.pause();
+        counters
+            .solver
+            .velocity_assembly_time_constraints_init
+            .resume();
         self.velocity_solver.init_constraints(
             island_id,
             islands,
@@ -73,7 +84,13 @@ impl IslandSolver {
             joint_indices,
             &mut self.contact_constraints,
             &mut self.joint_constraints,
+            #[cfg(feature = "dim3")]
+            params.friction_model,
         );
+        counters
+            .solver
+            .velocity_assembly_time_constraints_init
+            .pause();
         counters.solver.velocity_assembly_time.pause();
 
         // SOLVE
@@ -92,14 +109,8 @@ impl IslandSolver {
         counters.solver.velocity_writeback_time.resume();
         self.joint_constraints.writeback_impulses(impulse_joints);
         self.contact_constraints.writeback_impulses(manifolds);
-        self.velocity_solver.writeback_bodies(
-            base_params,
-            num_solver_iterations,
-            islands,
-            island_id,
-            bodies,
-            multibodies,
-        );
+        self.velocity_solver
+            .writeback_bodies(base_params, islands, island_id, bodies, multibodies);
         counters.solver.velocity_writeback_time.pause();
     }
 }
