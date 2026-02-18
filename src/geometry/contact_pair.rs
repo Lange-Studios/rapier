@@ -84,7 +84,7 @@ impl IntersectionPair {
         colliders: &ColliderSet,
         collider1: ColliderHandle,
         collider2: ColliderHandle,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         self.start_event_emitted = true;
         events.handle_collision_event(
@@ -101,7 +101,7 @@ impl IntersectionPair {
         colliders: &ColliderSet,
         collider1: ColliderHandle,
         collider2: ColliderHandle,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         self.start_event_emitted = false;
         events.handle_collision_event(
@@ -274,7 +274,7 @@ impl ContactPair {
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         self.start_event_emitted = true;
 
@@ -290,7 +290,7 @@ impl ContactPair {
         &mut self,
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         self.start_event_emitted = false;
 

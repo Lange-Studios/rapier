@@ -287,7 +287,7 @@ impl NarrowPhase {
         removed_colliders: &[ColliderHandle],
         colliders: &mut ColliderSet,
         bodies: &mut RigidBodySet,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         // TODO: avoid these hash-maps.
         // They are necessary to handle the swap-remove done internally
@@ -343,7 +343,7 @@ impl NarrowPhase {
         bodies: &mut RigidBodySet,
         prox_id_remap: &mut HashMap<ColliderHandle, ColliderGraphIndex>,
         contact_id_remap: &mut HashMap<ColliderHandle, ColliderGraphIndex>,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         // Wake up every body in contact with the deleted collider and generate Stopped collision events.
         if let Some(islands) = islands {
@@ -432,7 +432,7 @@ impl NarrowPhase {
         modified_colliders: &[ColliderHandle],
         colliders: &ColliderSet,
         bodies: &mut RigidBodySet,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         let mut pairs_to_remove = vec![];
 
@@ -540,7 +540,7 @@ impl NarrowPhase {
         colliders: &ColliderSet,
         bodies: &mut RigidBodySet,
         pair: &ColliderPair,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
         mode: PairRemovalMode,
     ) {
         if let (Some(co1), Some(co2)) =
@@ -682,7 +682,7 @@ impl NarrowPhase {
         colliders: &ColliderSet,
         bodies: &mut RigidBodySet,
         broad_phase_events: &[BroadPhasePairEvent],
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         for event in broad_phase_events {
             match event {
@@ -709,7 +709,7 @@ impl NarrowPhase {
         bodies: &RigidBodySet,
         colliders: &ColliderSet,
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         let nodes = &self.intersection_graph.graph.nodes;
         let query_dispatcher = &*self.query_dispatcher;
@@ -815,7 +815,7 @@ impl NarrowPhase {
         impulse_joints: &ImpulseJointSet,
         multibody_joints: &MultibodyJointSet,
         hooks: &dyn PhysicsHooks,
-        events: &dyn EventHandler,
+        events: &mut dyn EventHandler,
     ) {
         let query_dispatcher = &*self.query_dispatcher;
         #[cfg(feature = "parallel")]
