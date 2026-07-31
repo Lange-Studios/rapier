@@ -790,6 +790,11 @@ impl NarrowPhase {
 
             let active_events = co1.flags.active_events | co2.flags.active_events;
 
+            if had_intersection && active_events.contains(ActiveEvents::ACTIVE_COLLISION_EVENTS) {
+                edge.weight
+                    .emit_active_event(bodies, colliders, handle1, handle2, events);
+            }
+
             if active_events.contains(ActiveEvents::COLLISION_EVENTS)
                 && had_intersection != edge.weight.intersecting
             {
@@ -1102,14 +1107,21 @@ impl NarrowPhase {
                 }
             }
 
+            let active_events = co1.flags.active_events | co2.flags.active_events;
+            let has_any_active_contact = pair.has_any_active_contact();
+
+            if has_any_active_contact
+                && active_events.contains(ActiveEvents::ACTIVE_COLLISION_EVENTS)
+            {
+                pair.emit_active_event(bodies, colliders, events);
+            }
+
             /*
              * Handle actions on contact start/stop:
              *  - Emit event (if applicable).
              *  - Notify the island manager to potentially wake up the bodies.
              */
-            let has_any_active_contact = pair.has_any_active_contact();
             if has_any_active_contact != had_any_active_contact {
-                let active_events = co1.flags.active_events | co2.flags.active_events;
                 if active_events.contains(ActiveEvents::COLLISION_EVENTS) {
                     if has_any_active_contact {
                         pair.emit_start_event(bodies, colliders, events);
